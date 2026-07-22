@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { Command, CommanderError, Option } from 'commander';
 import { MscEventApi } from './api.js';
-import { loadBearerToken, loadRuntimeConfig } from './config.js';
+import { loadAccessToken } from './auth.js';
+import { loadRuntimeConfig } from './config.js';
 import { CliError, EXIT, safeError } from './errors.js';
 import { parseSearchSpec } from './lookup.js';
 import { parseFormat, renderOutput, type OutputFormat } from './output.js';
@@ -15,7 +16,7 @@ const common = (command: Command): Command => command
 
 const service = async (options: CommonOptions, auth: boolean): Promise<SupportService> => {
   const config = loadRuntimeConfig(options.baseUrl ? { baseUrl: options.baseUrl } : {});
-  const token = auth ? await loadBearerToken() : undefined;
+  const token = auth ? await loadAccessToken({ timeoutMs: config.timeoutMs }) : undefined;
   return new SupportService(new MscEventApi(token ? { ...config, token } : config));
 };
 

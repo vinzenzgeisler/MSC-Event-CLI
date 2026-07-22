@@ -6,6 +6,13 @@ export type RuntimeConfig = {
   timeoutMs: number;
 };
 
+export type CognitoClientConfig = {
+  tokenUrl: URL;
+  clientId: string;
+  clientSecretFile: string;
+  scope: string;
+};
+
 const isLocalHost = (hostname: string): boolean =>
   hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1';
 
@@ -24,6 +31,48 @@ export const parseBaseUrl = (raw: string): URL => {
   }
   url.pathname = url.pathname.replace(/\/$/, '');
   return url;
+};
+
+export const parseCognitoBaseUrl = (raw: string): URL => {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new CliError('INVALID_COGNITO_URL', 'Cognito URL is invalid.', EXIT.usage);
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
+    throw new CliError('INVALID_COGNITO_URL', 'Cognito URL must be a credential-free HTTPS URL.', EXIT.usage);
+  }
+  if (url.pathname !== '/' && url.pathname !== '') {
+    throw new CliError('INVALID_COGNITO_URL', 'Cognito URL must not contain a path.', EXIT.usage);
+  }
+  url.pathname = '/oauth2/token';
+  return url;
+};
+
+export const loadCognitoClientConfig = (env: NodeJS.ProcessEnv = process.env): CognitoClientConfig | undefined => {
+  const rawUrl = env.MSC_EVENT_COGNITO_URL?.trim();
+  const clientId = env.MSC_EVENT_COGNITO_CLIENT_ID?.trim();
+  const clientSecretFile = env.MSC_EVENT_COGNITO_CLIENT_SECRET_FILE?.trim();
+  const configured = [rawUrl, clientId, clientSecretFile].filter(Boolean).length;
+  if (configured === 0) return undefined;
+  if (configured !== 3) {
+    throw new CliError(
+      'INCOMPLETE_COGNITO_CONFIG',
+      'Set MSC_EVENT_COGNITO_URL, MSC_EVENT_COGNITO_CLIENT_ID and MSC_EVENT_COGNITO_CLIENT_SECRET_FILE together.',
+      EXIT.auth
+    );
+  }
+  const scope = env.MSC_EVENT_COGNITO_SCOPE?.trim() || 'msc-support/entries.read';
+  if (!/^[A-Za-z0-9._:/-]{1,256}$/.test(scope)) {
+    throw new CliError('INVALID_COGNITO_SCOPE', 'Cognito scope is invalid.', EXIT.auth);
+  }
+  return {
+    tokenUrl: parseCognitoBaseUrl(rawUrl!),
+    clientId: clientId!,
+    clientSecretFile: clientSecretFile!,
+    scope
+  };
 };
 
 export const loadRuntimeConfig = (input: { baseUrl?: string; env?: NodeJS.ProcessEnv } = {}): RuntimeConfig => {

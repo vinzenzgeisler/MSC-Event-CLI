@@ -26,10 +26,11 @@ Exactly one lookup option is required. Orga code, e-mail and start number are ma
 ## Configuration
 
 - `MSC_EVENT_API_URL`: required API base URL. HTTPS is mandatory; plain HTTP is accepted only for localhost.
-- `MSC_EVENT_TOKEN` or `MSC_EVENT_TOKEN_FILE`: bearer token for admin commands. Set exactly one. A mounted secret file is preferred.
+- Recommended machine authentication: set `MSC_EVENT_COGNITO_URL`, `MSC_EVENT_COGNITO_CLIENT_ID` and `MSC_EVENT_COGNITO_CLIENT_SECRET_FILE`. The CLI exchanges the root-protected secret for a short-lived access token on each command. `MSC_EVENT_COGNITO_SCOPE` defaults to `msc-support/entries.read`.
+- Transitional user authentication: `MSC_EVENT_TOKEN` or `MSC_EVENT_TOKEN_FILE`. Set exactly one and do not combine it with Cognito client credentials.
 - `MSC_EVENT_TIMEOUT_MS`: optional timeout, default 10000 ms.
 
-The current backend accepts an existing user bearer token. A durable Cognito machine client/service account still requires a backend/authorizer extension and read-only IAM/group mapping. Do not commit tokens or pass them as command-line arguments.
+The dedicated Cognito machine client must be provisioned by the matching backend infrastructure change. Never commit the client secret or pass it as a command-line argument or environment variable.
 
 ## Output and exit codes
 
@@ -72,6 +73,9 @@ docker run --rm \
 ```
 
 OpenClaw should invoke the container as a subprocess and consume JSON stdout. Never copy the bearer token into prompts, chat messages, command arguments or logs.
+
+For the hardened gateway mount and the fixed read-only wrapper, see
+[`deployment/README.md`](deployment/README.md).
 
 ## Development
 

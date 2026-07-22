@@ -1,0 +1,28 @@
+services:
+  OPENCLAW_GATEWAY_SERVICE:
+    environment:
+      MSC_EVENT_API_URL: https://j3w759az4f.execute-api.eu-central-1.amazonaws.com
+      MSC_EVENT_COGNITO_URL: https://dreiecksrennen-prod-auth-330221.auth.eu-central-1.amazoncognito.com
+      MSC_EVENT_COGNITO_CLIENT_ID: SUPPORT_MACHINE_CLIENT_ID
+      MSC_EVENT_COGNITO_CLIENT_SECRET_FILE: /run/secrets/msc_event_cognito_client_secret
+      MSC_EVENT_COGNITO_SCOPE: msc-support/entries.read
+      MSC_EVENT_TIMEOUT_MS: "10000"
+    volumes:
+      - type: bind
+        source: /root/openclaw-config/msc-event-cli/app
+        target: /opt/msc-event-cli
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /root/openclaw-config/msc-event-cli/msc-event-readonly
+        target: /usr/local/bin/msc-event-readonly
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /root/openclaw-secrets/msc_event_cognito_client_secret
+        target: /run/secrets/msc_event_cognito_client_secret
+        read_only: true
+        bind:
+          create_host_path: false

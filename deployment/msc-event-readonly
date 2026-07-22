@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Narrow OpenClaw entry point for the MSC Event RegistrationProvider."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import re
+import sys
+from urllib.parse import urlparse
+
+NODE = Path("/usr/local/bin/node")
+CLI = Path("/opt/msc-event-cli/dist/src/cli.js")
+LOOKUP_OPTIONS = {"--orga-code", "--email", "--name", "--start-number"}
+UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.I)
+CLIENT_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def fail(message: str, code: int = 4) -> None:
+    print(f"msc-event-readonly: {message}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def command_args(argv: list[str]) -> list[str]:
+    if argv == ["health"]:
+        return argv
+    if len(argv) == 3 and argv[0] == "lookup" and argv[1] in LOOKUP_OPTIONS and argv[2].strip():
+        if len(argv[2]) > 320 or any(char in argv[2] for char in "\r\n\0"):
+            fail("invalid lookup value")
+        return argv
+    if len(argv) == 3 and argv[:2] == ["detail", "--id"] and UUID.fullmatch(argv[2]):
+        return argv
+    fail("allowed commands: health; lookup with one supported key; detail --id UUID")
+
+
+def https_base(name: str, value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        fail(f"invalid {name}")
+    return value.rstrip("/")
+
+
+def runtime_env(source: dict[str, str]) -> dict[str, str]:
+    api_url = https_base("MSC_EVENT_API_URL", source.get("MSC_EVENT_API_URL", ""))
+    cognito_url = https_base("MSC_EVENT_COGNITO_URL", source.get("MSC_EVENT_COGNITO_URL", ""))
+    client_id = source.get("MSC_EVENT_COGNITO_CLIENT_ID", "").strip()
+    if not CLIENT_ID.fullmatch(client_id):
+        fail("invalid MSC_EVENT_COGNITO_CLIENT_ID")
+    secret_path = Path(source.get("MSC_EVENT_COGNITO_CLIENT_SECRET_FILE", ""))
+    if secret_path != Path("/run/secrets/msc_event_cognito_client_secret"):
+        fail("unexpected client secret path")
+    try:
+        stat = secret_path.lstat()
+    except OSError:
+        fail("client secret file is unavailable", 5)
+    if secret_path.is_symlink() or not secret_path.is_file() or stat.st_size < 1 or stat.st_size > 4096:
+        fail("client secret file is unsafe", 5)
+    if source.get("MSC_EVENT_TOKEN") or source.get("MSC_EVENT_TOKEN_FILE"):
+        fail("legacy bearer token source is forbidden")
+    timeout = source.get("MSC_EVENT_TIMEOUT_MS", "10000")
+    if not timeout.isdigit() or not 100 <= int(timeout) <= 120000:
+        fail("invalid MSC_EVENT_TIMEOUT_MS")
+    return {
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "HOME": "/tmp",
+        "LANG": "C.UTF-8",
+        "MSC_EVENT_API_URL": api_url,
+        "MSC_EVENT_COGNITO_URL": cognito_url,
+        "MSC_EVENT_COGNITO_CLIENT_ID": client_id,
+        "MSC_EVENT_COGNITO_CLIENT_SECRET_FILE": str(secret_path),
+        "MSC_EVENT_COGNITO_SCOPE": "msc-support/entries.read",
+        "MSC_EVENT_TIMEOUT_MS": timeout,
+    }
+
+
+def main() -> None:
+    args = command_args(sys.argv[1:])
+    if not NODE.is_file() or not os.access(NODE, os.X_OK) or not CLI.is_file():
+        fail("runtime is not installed", 5)
+    os.execve(str(NODE), [str(NODE), str(CLI), *args], runtime_env(dict(os.environ)))
+
+
+if __name__ == "__main__":
+    main()
