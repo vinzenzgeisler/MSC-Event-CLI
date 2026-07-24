@@ -1,0 +1,24 @@
+{
+  "id": "msc-approved-actions-preview",
+  "name": "MSC Approved Actions Preview",
+  "description": "Inert, hash-bound approval previews without any mutation transport.",
+  "version": "0.1.0",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "approved_action_preview"
+    ]
+  },
+  "toolMetadata": {
+    "approved_action_preview": {
+      "optional": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
