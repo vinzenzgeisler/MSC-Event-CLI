@@ -6,12 +6,16 @@ import {
 import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { parseActionIntent } from './action.js';
+import { jsonValueSchema, parseActionIntent } from './action.js';
 import type {
   ApprovalRecord,
   ApprovalStore,
   VerifiedFreshAuth,
 } from './approval.js';
+import {
+  encryptOutboxPayload,
+  initializeDurableOutboxTables,
+} from './durable-outbox.js';
 
 type ApprovalRow = {
   action_id: string;
@@ -99,6 +103,7 @@ export class SqliteApprovalStore implements ApprovalStore {
         details_json TEXT NOT NULL
       ) STRICT;
     `);
+    initializeDurableOutboxTables(this.database);
     if (path !== ':memory:') chmodSync(path, 0o600);
   }
 
@@ -221,39 +226,46 @@ export class SqliteApprovalStore implements ApprovalStore {
     consumedAt: string;
   }): Promise<ApprovalRecord> {
     return this.transaction(() => {
-      const record = this.getSync(options.actionId);
-      if (record.status !== 'approved') {
-        throw new Error(`action is ${record.status}, not approved`);
-      }
-      if (record.payloadHash !== options.payloadHash || record.expiresAt !== options.expiresAt) {
-        throw new Error('proof does not match queued action');
-      }
-      if (record.expiresAt <= options.consumedAt) throw new Error('action has expired');
-      if (record.expectedStateHash !== options.expectedStateHash) {
-        throw new Error('target state changed since preview');
-      }
-      const result = this.database.prepare(`
-        UPDATE approval_records
-        SET status = 'consumed', consumed_at = ?
-        WHERE action_id = ? AND status = 'approved'
-          AND payload_hash = ? AND expires_at = ? AND expected_state_hash = ?
-          AND expires_at > ?
+      return this.consumeSync(options);
+    });
+  }
+
+  async consumeToOutbox(options: {
+    actionId: string;
+    payloadHash: string;
+    expiresAt: string;
+    expectedStateHash: string;
+    consumedAt: string;
+  }): Promise<ApprovalRecord> {
+    return this.transaction(() => {
+      const record = this.assertConsumable(options);
+      const encrypted = encryptOutboxPayload(this.encryptionKey, {
+        actionId: record.actionId,
+        payloadHash: record.payloadHash,
+        kind: record.intent.kind,
+        payload: jsonValueSchema.parse(record.intent),
+        createdAt: options.consumedAt,
+      });
+      this.database.prepare(`
+        INSERT INTO durable_outbox (
+          action_id, payload_hash, kind, payload_nonce, payload_ciphertext,
+          payload_auth_tag, created_at, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued')
       `).run(
-        options.consumedAt,
-        options.actionId,
-        options.payloadHash,
-        options.expiresAt,
-        options.expectedStateHash,
+        record.actionId,
+        record.payloadHash,
+        record.intent.kind,
+        encrypted.nonce,
+        encrypted.ciphertext,
+        encrypted.authTag,
         options.consumedAt,
       );
-      if (result.changes !== 1) throw new Error('approval consumption changed concurrently');
-      const consumed = {
-        ...record,
-        status: 'consumed' as const,
-        consumedAt: options.consumedAt,
-      };
-      this.audit(options.consumedAt, 'consumed', consumed, {});
-      return consumed;
+      this.database.prepare(`
+        INSERT INTO durable_outbox_audit (
+          at, event, action_id, payload_hash, details_json
+        ) VALUES (?, 'queued', ?, ?, '{}')
+      `).run(options.consumedAt, record.actionId, record.payloadHash);
+      return this.consumeSync(options, record);
     });
   }
 
@@ -320,6 +332,67 @@ export class SqliteApprovalStore implements ApprovalStore {
       .get(actionId) as ApprovalRow | undefined;
     if (!row) throw new Error('unknown action');
     return this.recordFromRow(row);
+  }
+
+  private assertConsumable(options: {
+    actionId: string;
+    payloadHash: string;
+    expiresAt: string;
+    expectedStateHash: string;
+    consumedAt: string;
+  }): ApprovalRecord {
+    const record = this.getSync(options.actionId);
+    if (record.status !== 'approved') {
+      throw new Error(`action is ${record.status}, not approved`);
+    }
+    if (
+      record.payloadHash !== options.payloadHash ||
+      record.expiresAt !== options.expiresAt
+    ) {
+      throw new Error('proof does not match queued action');
+    }
+    if (record.expiresAt <= options.consumedAt) throw new Error('action has expired');
+    if (record.expectedStateHash !== options.expectedStateHash) {
+      throw new Error('target state changed since preview');
+    }
+    return record;
+  }
+
+  private consumeSync(
+    options: {
+      actionId: string;
+      payloadHash: string;
+      expiresAt: string;
+      expectedStateHash: string;
+      consumedAt: string;
+    },
+    validatedRecord?: ApprovalRecord,
+  ): ApprovalRecord {
+    const record = validatedRecord ?? this.assertConsumable(options);
+    const result = this.database.prepare(`
+      UPDATE approval_records
+      SET status = 'consumed', consumed_at = ?
+      WHERE action_id = ? AND status = 'approved'
+        AND payload_hash = ? AND expires_at = ? AND expected_state_hash = ?
+        AND expires_at > ?
+    `).run(
+      options.consumedAt,
+      options.actionId,
+      options.payloadHash,
+      options.expiresAt,
+      options.expectedStateHash,
+      options.consumedAt,
+    );
+    if (result.changes !== 1) {
+      throw new Error('approval consumption changed concurrently');
+    }
+    const consumed = {
+      ...record,
+      status: 'consumed' as const,
+      consumedAt: options.consumedAt,
+    };
+    this.audit(options.consumedAt, 'consumed', consumed, {});
+    return consumed;
   }
 
   private encryptIntent(record: ApprovalRecord): {

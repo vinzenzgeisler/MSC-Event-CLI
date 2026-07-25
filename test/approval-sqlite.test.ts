@@ -12,6 +12,7 @@ import {
   type ApprovalRecord,
 } from '../src/approval.js';
 import { SqliteApprovalStore } from '../src/approval-sqlite.js';
+import { SqliteDurableOutbox } from '../src/durable-outbox.js';
 
 const intent: ActionIntent = {
   version: 1,
@@ -196,6 +197,89 @@ test('runs the complete proof lifecycle through the transactional store', async 
   assert.ok(proof);
   assert.deepEqual(await queue.consume(proof, intent.expectedState), intent);
   await assert.rejects(queue.consume(proof, intent.expectedState), /consumed, not approved/);
+});
+
+test('atomically consumes an approval into the encrypted outbox', async (t) => {
+  const { path, first, second } = await stores();
+  const now = new Date('2026-07-23T14:00:00.000Z');
+  const queue = new ApprovalQueue({
+    store: first,
+    signingKey: Buffer.alloc(32, 19),
+    now: () => now,
+    freshAuthVerifier: {
+      async verify() {
+        return {
+          actor: 'vinzenz',
+          authenticatedAt: now.toISOString(),
+          method: 'passkey',
+          assertionId: 'outbox-assertion',
+        };
+      },
+    },
+  });
+  const proposed = await queue.propose(intent, 'atomic-outbox');
+  const proof = await queue.decide(proposed.actionId, 'approve', {});
+  assert.ok(proof);
+
+  const consumed = await queue.consumeToOutbox(proof, intent.expectedState);
+  assert.deepEqual(consumed, intent);
+  assert.equal((await first.get(proposed.actionId)).status, 'consumed');
+
+  const outbox = new SqliteDurableOutbox(path, {
+    encryptionKey: Buffer.alloc(32, 17),
+  });
+  t.after(() => {
+    outbox.close();
+    first.close();
+    second.close();
+  });
+  const queued = outbox.get(proposed.actionId);
+  assert.equal(queued.status, 'queued');
+  assert.equal(queued.kind, intent.kind);
+  assert.equal(queued.payloadHash, hashActionIntent(intent));
+  assert.deepEqual(queued.payload, intent);
+});
+
+test('rolls back outbox insertion when approval state validation fails', async (t) => {
+  const { path, first, second } = await stores();
+  const now = new Date('2026-07-23T14:00:00.000Z');
+  const queue = new ApprovalQueue({
+    store: first,
+    signingKey: Buffer.alloc(32, 20),
+    now: () => now,
+    freshAuthVerifier: {
+      async verify() {
+        return {
+          actor: 'vinzenz',
+          authenticatedAt: now.toISOString(),
+          method: 'passkey',
+          assertionId: 'rollback-assertion',
+        };
+      },
+    },
+  });
+  const proposed = await queue.propose(intent, 'atomic-outbox-rollback');
+  const proof = await queue.decide(proposed.actionId, 'approve', {});
+  assert.ok(proof);
+  await assert.rejects(
+    queue.consumeToOutbox(proof, { changed: true }),
+    /state changed/,
+  );
+  assert.equal((await first.get(proposed.actionId)).status, 'approved');
+
+  const database = new DatabaseSync(path, { readOnly: true });
+  t.after(() => {
+    database.close();
+    first.close();
+    second.close();
+  });
+  assert.equal(
+    (
+      database.prepare('SELECT COUNT(*) AS count FROM durable_outbox')
+        .get() as { count: number }
+    ).count,
+    0,
+  );
 });
 
 test('purges expired or retention-ended encrypted records but preserves audit history', async (t) => {

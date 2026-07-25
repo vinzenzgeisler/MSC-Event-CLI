@@ -2,11 +2,13 @@
   "name": "msc-event-cli",
   "version": "0.1.0",
   "private": true,
-  "description": "Strictly read-only support CLI for MSC Event registrations",
+  "description": "Approval-gated MSC operations CLI with fixed read-only providers",
   "type": "module",
   "bin": {
     "msc-event": "dist/src/cli.js",
-    "approved-actions-bootstrap": "dist/src/passkey-bootstrap-operator-cli.js"
+    "approved-actions-bootstrap": "dist/src/passkey-bootstrap-operator-cli.js",
+    "msc-mail-flow-demo": "dist/src/mail-flow-demo-cli.js",
+    "msc": "dist/src/msc-ops-cli.js"
   },
   "engines": {
     "node": ">=22.22.3"
@@ -21,10 +23,12 @@
   "dependencies": {
     "@simplewebauthn/server": "^13.3.2",
     "commander": "^14.0.0",
+    "nodemailer": "^9.0.3",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
+    "@types/nodemailer": "^7.0.11",
     "typescript": "^5.9.2"
   },
   "peerDependencies": {

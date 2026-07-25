@@ -87,6 +87,13 @@ export interface ApprovalStore {
     expectedStateHash: string;
     consumedAt: string;
   }): Promise<ApprovalRecord>;
+  consumeToOutbox?(options: {
+    actionId: string;
+    payloadHash: string;
+    expiresAt: string;
+    expectedStateHash: string;
+    consumedAt: string;
+  }): Promise<ApprovalRecord>;
 }
 
 export const hashJson = (value: JsonValue): string =>
@@ -208,6 +215,24 @@ export class ApprovalQueue {
   async consume(proofToken: string, currentState: unknown): Promise<ActionIntent> {
     const proof = this.verify(proofToken);
     const consumed = await this.store.consume({
+      actionId: proof.actionId,
+      payloadHash: proof.payloadHash,
+      expiresAt: proof.expiresAt,
+      expectedStateHash: hashJson(jsonValueSchema.parse(currentState)),
+      consumedAt: this.now().toISOString(),
+    });
+    return consumed.intent;
+  }
+
+  async consumeToOutbox(
+    proofToken: string,
+    currentState: unknown,
+  ): Promise<ActionIntent> {
+    if (!this.store.consumeToOutbox) {
+      throw new Error('approval store does not support atomic outbox consumption');
+    }
+    const proof = this.verify(proofToken);
+    const consumed = await this.store.consumeToOutbox({
       actionId: proof.actionId,
       payloadHash: proof.payloadHash,
       expiresAt: proof.expiresAt,

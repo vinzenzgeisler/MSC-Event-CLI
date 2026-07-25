@@ -1,4 +1,6 @@
 import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
+import { chmodSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { AuthenticatorTransportFuture } from '@simplewebauthn/server';
 import type {
   RegisteredWebAuthnCredential,
@@ -112,6 +114,9 @@ export class SqliteWebAuthnStore
   private readonly database: DatabaseSync;
 
   constructor(path: string) {
+    if (path !== ':memory:') {
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    }
     this.database = new DatabaseSync(path);
     this.database.exec(`
       PRAGMA journal_mode = WAL;
@@ -183,6 +188,7 @@ export class SqliteWebAuthnStore
       CREATE UNIQUE INDEX IF NOT EXISTS passkey_bootstrap_grants_actor
       ON passkey_bootstrap_grants(actor);
     `);
+    if (path !== ':memory:') chmodSync(path, 0o600);
   }
 
   close(): void {
