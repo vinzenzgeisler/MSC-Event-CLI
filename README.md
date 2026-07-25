@@ -1,6 +1,9 @@
-# MSC Event CLI
+# MSC Operations CLI
 
-Strictly read-only support client for the MSC Event admin API. It resolves a participant in the current event and returns compact operational fields by default, with an explicit full-detail mode for authorized support work.
+The `msc` command combines fixed read-only providers for Nennungen and mail
+with an approval-gated preparation path. A write request is encrypted and
+persisted for the shared passkey page; the CLI itself has no Event mutation or
+mail transport.
 
 ## Commands
 
@@ -19,6 +22,11 @@ node dist/src/cli.js detail --id 00000000-0000-4000-8000-000000000000
 node dist/src/cli.js detail --id 00000000-0000-4000-8000-000000000000 --full
 node dist/src/cli.js lookup --orga-code 11OLD-7K4P9 --full
 node dist/src/cli.js health
+
+# Gemeinsame Oberfläche
+node dist/src/msc-ops-cli.js nennung lookup --orga-code 11OLD-7K4P9
+node dist/src/msc-ops-cli.js mail read \
+  --account msc-info --folder INBOX --message-id 7
 ```
 
 Exactly one lookup option is required. Orga code, e-mail and start number are matched exactly after the API search. Names are matched case-insensitively after whitespace normalization. Multiple registrations belonging to one driver are returned together; multiple drivers produce `ambiguous`.
@@ -84,3 +92,84 @@ npm test
 npm run typecheck
 npm run build
 ```
+
+## Approval-gated changes
+
+The two preparation commands reread the exact source immediately before
+creating a pending approval:
+
+```bash
+node dist/src/msc-ops-cli.js nennung change \
+  --config /etc/msc/approved-actions.json \
+  --id 00000000-0000-4000-8000-000000000000 \
+  --operation-file /secure/operator/change.json \
+  --idempotency-key entry:00000000:status:v1
+
+node dist/src/msc-ops-cli.js mail reply \
+  --config /etc/msc/approved-actions.json \
+  --account msc-info \
+  --folder INBOX \
+  --message-id 7 \
+  --body-file /secure/operator/reply.txt \
+  --source "MSC-Ablaufplan 2026" \
+  --idempotency-key reply:msc-info:INBOX:7:v2
+```
+
+The reply remains an ordinary UTF-8 text file and can be edited with the
+operator's normal editor before submission. Use a new idempotency key for a
+materially changed draft; reusing a key with different content fails closed.
+
+An operation file contains exactly one allowlisted change, for example:
+
+```json
+{
+  "type": "acceptance-status",
+  "acceptanceStatus": "accepted",
+  "sendLifecycleMail": false
+}
+```
+
+Other supported operation types are `payment-amounts`, `notes` and `class`.
+Unknown properties and lifecycle-mail side effects are rejected.
+
+The root-owned configuration contains paths, policy and the public approval
+origin, but no key material:
+
+```json
+{
+  "version": 1,
+  "stateDatabasePath": "/var/lib/msc-approved-actions/actions.sqlite",
+  "encryptionKeyFile": "/run/secrets/msc-approved-actions-encryption-key",
+  "signingKeyFile": "/run/secrets/msc-approved-actions-signing-key",
+  "publicOrigin": "https://approval.example.org",
+  "mailPolicy": {
+    "version": 1,
+    "accounts": {
+      "msc-nennung": {
+        "active": true,
+        "senderIdentity": "nennung@example.org",
+        "displayName": "MSC Nennung",
+        "allowedFolders": ["INBOX"]
+      },
+      "msc-info": {
+        "active": true,
+        "senderIdentity": "info@example.org",
+        "displayName": "MSC Info",
+        "allowedFolders": ["INBOX"]
+      },
+      "msc-vorstand": {
+        "active": true,
+        "senderIdentity": "admin@example.org",
+        "displayName": "MSC Vorstand",
+        "allowedFolders": ["INBOX"]
+      }
+    }
+  }
+}
+```
+
+The configuration must be absolute, non-symlinked, owner-bound and private.
+Each key file must be mode `0600` and contain exactly 32 bytes encoded as hex
+or base64url. The shared approval page, explicit workers and transports remain
+dormant library boundaries: this repository does not start a listener, load
+production secrets, send mail or mutate an Event entry by itself.

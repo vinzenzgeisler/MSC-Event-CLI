@@ -3,8 +3,13 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { ApprovedActionExecutionCoordinator } from '../src/approval-execution.js';
+import {
+  ApprovedActionExecutionCoordinator,
+  ApprovedActionOutboxCoordinator,
+} from '../src/approval-execution.js';
 import { ApprovalQueue } from '../src/approval.js';
+import { SqliteApprovalStore } from '../src/approval-sqlite.js';
+import { SqliteDurableOutbox } from '../src/durable-outbox.js';
 import {
   createMailSendIntent,
   MailSendDryRunAdapter,
@@ -142,4 +147,64 @@ test('two workers cannot invoke the same adapter twice', async () => {
   ]);
   assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
   assert.equal(invocations, 1);
+});
+
+test('outbox coordinator validates current state without invoking the adapter transport seam', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'approval-outbox-coordinator-'));
+  const path = join(directory, 'approval.sqlite');
+  const encryptionKey = Buffer.alloc(32, 33);
+  const store = new SqliteApprovalStore(path, { encryptionKey });
+  const outbox = new SqliteDurableOutbox(path, { encryptionKey });
+  t.after(() => {
+    outbox.close();
+    store.close();
+  });
+  const now = new Date('2026-07-23T18:00:00.000Z');
+  const queue = new ApprovalQueue({
+    store,
+    signingKey: Buffer.alloc(32, 34),
+    now: () => now,
+    freshAuthVerifier: {
+      async verify() {
+        return {
+          actor: 'vinzenz',
+          authenticatedAt: now.toISOString(),
+          method: 'passkey',
+          assertionId: 'outbox-coordinator-assertion',
+        };
+      },
+    },
+  });
+  const intent = createMailSendIntent(policy, {
+    account: 'msc-info',
+    to: 'recipient@example.invalid',
+    subject: 'Atomic outbox',
+    bodyText: 'This remains local.',
+    triageStatus: 'READY_TO_DRAFT',
+    sources: ['msc/faq.md'],
+    uncertainties: [],
+  });
+  const record = await queue.propose(intent, 'outbox-coordinator');
+  await queue.decide(record.actionId, 'approve', {});
+  const adapter = new MailSendDryRunAdapter(async (account) => ({
+    policyVersion: 1,
+    account,
+    senderIdentity: policy.accounts[account].senderIdentity,
+    allowedFolders: policy.accounts[account].allowedFolders,
+  }));
+  let executeInvocations = 0;
+  adapter.execute = async () => {
+    executeInvocations += 1;
+    throw new Error('transport seam must remain unused');
+  };
+  const coordinator = new ApprovedActionOutboxCoordinator(queue, [adapter]);
+
+  assert.deepEqual(await coordinator.enqueue(record.actionId), {
+    actionId: record.actionId,
+    kind: 'mail.send',
+    payloadHash: record.payloadHash,
+  });
+  assert.equal(executeInvocations, 0);
+  assert.equal(outbox.get(record.actionId).status, 'queued');
+  assert.equal((await store.get(record.actionId)).status, 'consumed');
 });

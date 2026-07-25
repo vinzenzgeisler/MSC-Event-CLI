@@ -11,6 +11,12 @@ export interface ApprovedActionExecution {
   result: ExecutionResult;
 }
 
+export interface ApprovedActionOutboxEntry {
+  actionId: string;
+  kind: string;
+  payloadHash: string;
+}
+
 /**
  * Trusted internal worker boundary. It never receives an execution proof from
  * the browser. Two workers may race, but only the one that atomically consumes
@@ -63,6 +69,48 @@ export class ApprovedActionExecutionCoordinator {
       actionId,
       kind: approved.intent.kind,
       result,
+    };
+  }
+}
+
+/**
+ * Productive-path boundary before any transport exists. It performs current
+ * state validation and atomically changes an approved SQLite record to
+ * consumed while creating its encrypted outbox entry. It never invokes an
+ * executor adapter or network client.
+ */
+export class ApprovedActionOutboxCoordinator {
+  private readonly adapters = new Map<string, ExecutorAdapter>();
+
+  constructor(
+    private readonly queue: ApprovalQueue,
+    adapters: ExecutorAdapter[],
+  ) {
+    for (const adapter of adapters) {
+      if (this.adapters.has(adapter.kind)) {
+        throw new Error(`duplicate executor adapter for ${adapter.kind}`);
+      }
+      this.adapters.set(adapter.kind, adapter);
+    }
+  }
+
+  async enqueue(actionId: string): Promise<ApprovedActionOutboxEntry> {
+    const approved = (await this.queue.approved()).find(
+      (record) => record.actionId === actionId,
+    );
+    if (!approved) throw new Error('action is not approved or has expired');
+    const adapter = this.adapters.get(approved.intent.kind);
+    if (!adapter) {
+      throw new Error(`no executor adapter registered for ${approved.intent.kind}`);
+    }
+    const intent = adapter.intentSchema.parse(approved.intent) as ActionIntent;
+    const currentState = await adapter.readCurrentState(intent);
+    const proof = await this.queue.executionProofForApproved(actionId);
+    const consumed = await this.queue.consumeToOutbox(proof, currentState);
+    return {
+      actionId,
+      kind: consumed.kind,
+      payloadHash: approved.payloadHash,
     };
   }
 }

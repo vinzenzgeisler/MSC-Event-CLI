@@ -235,6 +235,18 @@ providers. It does not call Himalaya, the Event API, or any production service.
   AES-256-GCM backup. Restore is also exclusive, verifies authentication and
   runs `PRAGMA integrity_check` before publishing the database. Wrong keys and
   existing destination files fail closed.
+- The mail reconciliation outbox and WebAuthn databases form one recovery
+  unit. Back up both with the composition closed, label both snapshots with the
+  same recovery point and retain the injected encryption key separately.
+  Restore into two absent final paths; never combine snapshots from different
+  recovery points or restore only one file. Keep each destination owned by the
+  runtime uid and mode `0600`.
+- The inactive start path accepts either two absent state paths for a fresh
+  initialization or two existing private regular files. A partial restore,
+  shared path, symlink, owner or permission mismatch, failed
+  `PRAGMA integrity_check`, or file replacement during inspection fails before
+  either writable SQLite store is opened. The start path remains listener-,
+  worker- and transport-free.
 
 ## Internal dry-run execution worker
 
@@ -247,6 +259,167 @@ providers. It does not call Himalaya, the Event API, or any production service.
   must first add a durable outbox/dispatch state and explicitly reconcile
   uncertain SMTP outcomes; otherwise a crash could silently lose or duplicate
   a message.
+
+## Durable outbox foundation
+
+- `SqliteDurableOutbox` provides an encrypted, transactional local hand-off for
+  an approved action. Enqueue is idempotent by action id and rejects reuse with
+  a different payload hash or kind.
+- A queued record can be claimed by exactly one local worker. The generated
+  attempt id binds the final state transition, so another worker cannot mark an
+  unrelated attempt as accepted.
+- A delivery attempt may end as `accepted` or `uncertain`. `accepted` means
+  only that the configured provider accepted responsibility; it does not claim
+  final delivery to the recipient. Records in
+  `dispatching` or `uncertain` are never returned to the automatic queue and
+  are listed explicitly for reconciliation. This avoids treating a timeout or
+  worker crash as proof that an SMTP server did not accept the message.
+- Sensitive command payloads use AES-256-GCM at rest. Audit rows contain only
+  lifecycle metadata, action id, payload hash, worker id, attempt id and a
+  bounded uncertainty code; mail addresses, subject and body are excluded.
+- The preflight considered maintained queue libraries. `pg-boss` requires
+  PostgreSQL and BullMQ requires Redis; both add a network service and a larger
+  operational boundary. `better-sqlite3` duplicates the SQLite runtime already
+  provided by the supported Node version. The prototype therefore uses
+  `node:sqlite` and no new dependency.
+- `ApprovalQueue.consumeToOutbox`, `SqliteApprovalStore.consumeToOutbox` and
+  `ApprovedActionOutboxCoordinator` connect current-state validation to the
+  outbox without invoking a transport. Approval consumption, encrypted outbox
+  insertion and both audit events commit in one SQLite transaction; stale
+  state rolls the whole transaction back.
+- No transport is connected to a runtime. Production still needs trusted
+  configuration, secrets, listener/session integration, worker lifecycle and
+  an explicitly approved activation before delivery can be enabled.
+
+## Inactive mail transport boundary
+
+- `MailOutboxDispatchWorker` accepts only an injected `MailTransport`; no
+  transport is registered in a runtime. Most tests use an in-memory fake.
+- Every action gets a deterministic opaque RFC-style Message-ID derived from
+  its action id and approved payload hash. Retries therefore keep one
+  correlation key without exposing the raw action id.
+- A transport may return `not-submitted` only when it can prove that no bytes
+  crossed the provider boundary. That state safely releases the claim back to
+  `queued`. `unknown`, timeouts after a write, ambiguous acknowledgements and
+  unexpected exceptions become `uncertain` and cannot be dispatched again.
+- Reconciliation is explicit. Confirmed provider acceptance changes an
+  uncertain attempt to `accepted`; retry becomes possible only after external
+  evidence confirms non-delivery. Both decisions remain bound to the original
+  attempt id and are recorded without mail content.
+- `MailOutboxReconciliationService` additionally binds a fresh authentication
+  assertion to action id, attempt id, decision and a structured evidence
+  reference. The database stores the reviewer, authentication metadata,
+  bounded conclusion code and SHA-256 reference only; raw provider logs,
+  mailbox content and screenshots remain outside the approval database.
+- `WebAuthnReconciliationAuth` maps that exact context onto the existing
+  passkey ceremony through a versioned, domain-separated canonical SHA-256.
+  The legacy approve/reject slot mirrors accepted/not-accepted only inside the
+  challenge; the hash still binds the purpose, action, attempt, decision and
+  complete bounded evidence reference. Changing any of them burns the
+  single-use challenge without mutating outbox state.
+- `MailOutboxReconciliationHttpContract` is an inactive, framework-independent
+  API seam for viewing one ambiguous attempt, beginning its passkey ceremony
+  and submitting its decision. Every route needs a trusted server session and
+  per-record authorization; mutations additionally need exact same-origin
+  JSON and the session CSRF token. The view omits encrypted payload, recipient,
+  sender, subject and body. The contract has no listener, transport, runtime
+  registration or automatic retry.
+- `MailOutboxReconciliationComposition` connects the encrypted outbox, shared
+  SQLite passkey store, reconciliation service and inactive HTTP contract.
+  Its explicit reviewer policy authorizes both action kind and MSC mailbox
+  account. Even this composition root has no listener, scheduler, worker,
+  plugin registration or mail transport, so constructing it cannot activate
+  the endpoint or submit mail.
+- The separate runtime policy loader accepts only an absolute, owner-matched,
+  non-symlinked private JSON file. It validates exact HTTPS/WebAuthn origins,
+  RP scope, absolute state paths, reviewer scope and bounded freshness values.
+  Encryption keys and sessions are never read from this file. Its pure
+  readiness result omits key bytes, paths and reviewer identifiers and still
+  reports the entire composition as inactive.
+- `openInactiveMailOutboxReconciliation` is the complete local construction
+  path: it authenticates and validates policy and the injected key before
+  opening either SQLite file, then returns the still-unbound contract and an
+  idempotently closable composition. Invalid policy or key material creates no
+  state database.
+
+## Cohesive MSC mail flow boundary
+
+- `MscMailReadonlyProvider` is the sole mail-reading process adapter. Its
+  executable path is fixed to `/usr/local/bin/msc-mail-readonly`, it uses no
+  shell or caller-selected command seam, and it exposes only accounts, folders,
+  list and preview with strict input validation.
+- `MscMailFlow` connects one selected read-only source message to a complete
+  reply intent, approval URL and preview. It always marks proposed replies as
+  `approved-send`; transport is reachable only after fresh approval, atomic
+  consumption into the encrypted outbox and a single worker claim.
+- Dry-run and approved-send intent are distinct. Dry-run adapters reject
+  approved-send intents, while the dispatch worker rejects dry-run intents
+  before claiming or calling a transport.
+- The integration test proves read, full reply preview, fresh passkey-class
+  approval, atomic outbox handoff, one provider acceptance and refusal of a
+  second dispatch.
+- `msc-mail-flow-demo` is an executable acceptance demo of those five visible
+  stages. It uses local fakes for provider, passkey and transport, performs no
+  network access, reports exactly one accepted provider call and deletes its
+  temporary encrypted state after completion.
+- `InactiveMscMailFlowRuntime` connects the authenticated mobile approval
+  contract to an explicit one-shot worker cycle. It owns no listener, timer,
+  session store or secret loader; tests prove that a session-authorized
+  passkey decision produces one accepted dispatch and a second worker cycle
+  performs no duplicate work.
+- The `msc` operator CLI now presents the three user-facing areas directly:
+  `msc nennung` for fixed-wrapper health, lookup and detail; `msc mail` for
+  account, folder, list and safe message preview; and `msc approval demo` for
+  the complete local approval acceptance flow. Both provider adapters use
+  fixed executable paths and argument allowlists without a shell.
+- `event.entry.update` is the typed approval intent for Nennung changes. It
+  currently covers acceptance status without lifecycle mail, payment amounts,
+  notes and class changes. The exact entry id and current compact snapshot are
+  bound into the approval hash; hidden fields, target substitution and
+  unapproved lifecycle-mail side effects fail validation.
+- `msc nennung change` rereads that exact entry through the fixed read-only
+  provider, validates one operation file and persists the encrypted approval
+  record. `msc mail reply` likewise rereads the source message and binds the
+  sender, subject and operator-edited UTF-8 reply file before persistence.
+  Both commands return the same opaque `/approve/{actionId}` link and full
+  validated preview. Their root-owned configuration contains only paths,
+  approval origin and mailbox policy; separate mode-`0600` files provide the
+  encryption and proof-signing keys.
+- `InactiveMscEventChangeRuntime` discovers only approved
+  `event.entry.update` records and invokes an injected typed mutation adapter
+  in an explicit one-shot cycle. Tests prove fresh passkey-class approval,
+  current-state comparison, one-time consumption and exactly one local fake
+  mutation. It owns no credentials, timer, listener or concrete Event
+  transport.
+- `PrivateApprovalHttpAdapter` bridges the framework-independent shared page
+  to Node HTTP while accepting only an exact private IP binding declaration.
+  Construction creates an unbound server; the adapter exposes no `listen` or
+  `start` method. It caps request bodies, accepts only origin-form request
+  targets and obtains sessions exclusively from injected trusted middleware.
+  No host integration currently binds it.
+- `MscApprovalReviewComposition` binds Nennung changes, new mails and mail
+  replies to one encrypted SQLite queue, one transactional WebAuthn store, one
+  fresh-auth verifier and one `/approve/{actionId}` surface. Tests load both a
+  Nennung preview and a complete mail-reply preview through that same contract.
+  The composition still has no session implementation, listener or execution
+  worker and therefore cannot expose or execute anything by construction.
+
+## Dormant SMTP transport
+
+- `SmtpMailTransport` is an injected implementation built on maintained
+  Nodemailer 9. Constructing it performs no network action, and no instance is
+  registered in the plugin, composition root or runtime.
+- Configuration is explicit per MSC account; no default account exists.
+  Username, sender identity and approved envelope sender must match. Only
+  implicit TLS on port 465 or mandatory STARTTLS on port 587 is accepted, with
+  certificate verification and TLS 1.2 minimum.
+- Messages are plain text with an explicit envelope, deterministic Message-ID
+  and optional In-Reply-To. File and URL access, transport debugging and
+  logging are disabled.
+- Only an exact provider acknowledgement for the intended recipient and
+  Message-ID returns `accepted`. Incomplete acknowledgement is `unknown`;
+  exceptions are quarantined by the dispatch worker and never retried
+  automatically.
 
 ## Privacy-minimized notification seam
 
@@ -268,12 +441,13 @@ providers. It does not call Himalaya, the Event API, or any production service.
   server implementation, transactional SQLite store, registration service and
   initial one-time bootstrap grant. Production still needs the separately
   authenticated local operator command that invokes bootstrap issuance,
-  encrypted/permissioned database placement, backup/restore policy and
-  lifecycle cleanup for expired challenges and grants. The included in-memory
-  stores remain test/development-only. OpenClaw's existing operator session
-  alone is not treated as fresh authentication.
+  an operated encrypted backup schedule with off-host retention and restore
+  rehearsal, and lifecycle cleanup for expired challenges and grants. The
+  included in-memory stores remain test/development-only. OpenClaw's existing
+  operator session alone is not treated as fresh authentication.
 - HMAC is sufficient for one trusted service boundary. Separate approval and
   execution services should use asymmetric signed proofs and key rotation.
-- A productive mail transport and Event API adapters still need strict schemas,
-  recipient/identity binding, preview parity tests, and dry-run transport seams.
+- Productive activation still needs trusted secret loading, the authenticated
+  listener/session adapter, worker lifecycle, operational reconciliation,
+  backup rehearsal, deployment and a separately approved test mail.
 - No existing read-only wrapper or `msc-mail` skill policy is changed.

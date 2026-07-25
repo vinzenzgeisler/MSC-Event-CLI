@@ -45,7 +45,7 @@ const mailStateSchema = z.object({
 }).strict();
 
 const mailParametersSchema = z.object({
-  dryRun: z.literal(true),
+  dryRun: z.boolean(),
   triageStatus: z.literal('READY_TO_DRAFT'),
   sources: z.array(z.string().trim().min(1).max(500)).min(1).max(50),
   uncertainties: z.array(z.string().trim().min(1).max(500)).max(50),
@@ -80,6 +80,31 @@ export interface MscMailAccountPolicy {
   >;
 }
 
+export const mscMailAccountPolicySchema: z.ZodType<MscMailAccountPolicy> =
+  z.object({
+    version: z.literal(1),
+    accounts: z.object({
+      'msc-nennung': z.object({
+        active: z.boolean(),
+        senderIdentity: z.string().trim().min(1).max(320),
+        displayName: z.string().trim().min(1).max(200),
+        allowedFolders: z.array(z.string().trim().min(1).max(100)).min(1).max(20),
+      }).strict(),
+      'msc-info': z.object({
+        active: z.boolean(),
+        senderIdentity: z.string().trim().min(1).max(320),
+        displayName: z.string().trim().min(1).max(200),
+        allowedFolders: z.array(z.string().trim().min(1).max(100)).min(1).max(20),
+      }).strict(),
+      'msc-vorstand': z.object({
+        active: z.boolean(),
+        senderIdentity: z.string().trim().min(1).max(320),
+        displayName: z.string().trim().min(1).max(200),
+        allowedFolders: z.array(z.string().trim().min(1).max(100)).min(1).max(20),
+      }).strict(),
+    }).strict(),
+  }).strict();
+
 export interface MailSendDraft {
   account: MscMailAccount;
   to: string;
@@ -88,6 +113,7 @@ export interface MailSendDraft {
   triageStatus: 'READY_TO_DRAFT';
   sources: string[];
   uncertainties: string[];
+  deliveryMode?: 'dry-run' | 'approved-send';
 }
 
 export const parseMailSendIntent = (input: unknown): MailSendIntent => {
@@ -160,7 +186,7 @@ export const createMailSendIntent = (
       allowedFolders: accountPolicy.allowedFolders,
     },
     parameters: {
-      dryRun: true,
+      dryRun: draft.deliveryMode !== 'approved-send',
       triageStatus: draft.triageStatus,
       sources: draft.sources,
       uncertainties: draft.uncertainties,
@@ -240,6 +266,7 @@ export interface MailReplyDraft {
   triageStatus: 'READY_TO_DRAFT';
   sources: string[];
   uncertainties: string[];
+  deliveryMode?: 'dry-run' | 'approved-send';
 }
 
 const replyTargetId = (
@@ -339,7 +366,7 @@ export const createMailReplyIntent = (
       source,
     },
     parameters: {
-      dryRun: true,
+      dryRun: draft.deliveryMode !== 'approved-send',
       triageStatus: draft.triageStatus,
       sources: draft.sources,
       uncertainties: draft.uncertainties,
@@ -400,6 +427,9 @@ export class MailReplyDryRunAdapter implements ExecutorAdapter<MailReplyIntent> 
     _context: ExecutionContext,
   ): Promise<ExecutionResult> {
     const intent = parseMailReplyIntent(intentValue);
+    if (!intent.parameters.dryRun) {
+      throw new Error('dry-run adapter cannot execute an approved-send intent');
+    }
     return {
       result: {
         dryRun: true,
@@ -441,6 +471,9 @@ export class MailSendDryRunAdapter implements ExecutorAdapter<MailSendIntent> {
     _context: ExecutionContext,
   ): Promise<ExecutionResult> {
     const intent = parseMailSendIntent(intentValue);
+    if (!intent.parameters.dryRun) {
+      throw new Error('dry-run adapter cannot execute an approved-send intent');
+    }
     return {
       result: {
         dryRun: true,
