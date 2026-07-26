@@ -26,6 +26,7 @@ declare -a COMPOSE=()
 declare -a COMPOSE_FILES=()
 GATEWAY_CONTAINER=""
 GATEWAY_SERVICE=""
+GATEWAY_IMAGE=""
 PROJECT_NAME=""
 PROJECT_DIR=""
 CADDY_CONTAINER=""
@@ -72,8 +73,8 @@ trap rollback EXIT INT TERM
 
 require_preflight() {
   [[ "$(id -u)" == 0 ]] || die "Bitte als root ausführen."
-  for command in docker python3 node npm openssl install cp mv stat readlink curl \
-    getent runuser; do
+  for command in docker python3 openssl install cp mv stat readlink curl \
+    getent; do
     command -v "$command" >/dev/null 2>&1 || die "Befehl fehlt: $command"
   done
   [[ -f "${SOURCE_ROOT}/package.json" && -f "${SOURCE_ROOT}/plugin/production.mjs" ]] \
@@ -92,16 +93,16 @@ detect_runtime() {
   local row candidates=""
   while IFS= read -r id; do
     row="$(docker inspect --format \
-      '{{.Id}}{{"\t"}}{{index .Config.Labels "com.docker.compose.service"}}{{"\t"}}{{index .Config.Labels "com.docker.compose.project"}}{{"\t"}}{{index .Config.Labels "com.docker.compose.project.working_dir"}}{{"\t"}}{{index .Config.Labels "com.docker.compose.project.config_files"}}{{"\t"}}{{.Config.Image}}' "$id")"
+      '{{.Id}}{{"\t"}}{{index .Config.Labels "com.docker.compose.service"}}{{"\t"}}{{index .Config.Labels "com.docker.compose.project"}}{{"\t"}}{{index .Config.Labels "com.docker.compose.project.working_dir"}}{{"\t"}}{{index .Config.Labels "com.docker.compose.project.config_files"}}{{"\t"}}{{.Image}}' "$id")"
     if [[ "${row,,}" == *gateway* && "${row,,}" == *openclaw* ]]; then
       candidates+="${row}"$'\n'
     fi
   done < <(docker ps -q)
   mapfile -t rows < <(printf '%s' "$candidates" | sed '/^$/d')
   ((${#rows[@]} == 1)) || die "OpenClaw-Gateway ist nicht eindeutig."
-  local files image
+  local files
   IFS=$'\t' read -r GATEWAY_CONTAINER GATEWAY_SERVICE PROJECT_NAME \
-    PROJECT_DIR files image <<< "${rows[0]}"
+    PROJECT_DIR files GATEWAY_IMAGE <<< "${rows[0]}"
   local file
   IFS=',' read -r -a raw_files <<< "$files"
   for file in "${raw_files[@]}"; do
@@ -120,6 +121,9 @@ for mount in data.get("Mounts", []):
         break
 ')"
   [[ -f "$OPENCLAW_CONFIG" ]] || die "OpenClaw-Konfiguration wurde nicht gefunden."
+  docker run --rm --entrypoint sh "$GATEWAY_IMAGE" -c \
+    'command -v node >/dev/null && command -v npm >/dev/null' \
+    || die "Node.js und npm fehlen im OpenClaw-Gateway-Image."
 
   CADDY_CONTAINER="$(docker ps --format '{{.ID}}\t{{.Image}}\t{{.Names}}' |
     awk 'tolower($0) ~ /caddy/ {print $1}')"
@@ -172,12 +176,12 @@ build_application() {
     "${SOURCE_ROOT}/tsconfig.json" "${SOURCE_ROOT}/src" "${SOURCE_ROOT}/plugin" \
     "${staging}/app/"
   chown -R 1000:1000 -- "${staging}/app"
-  (
-    cd "${staging}/app"
-    runuser -u "$RUNTIME_USER" -- npm ci --legacy-peer-deps --include=dev --ignore-scripts
-    runuser -u "$RUNTIME_USER" -- npm run build
-    runuser -u "$RUNTIME_USER" -- npm prune --omit=dev --legacy-peer-deps --ignore-scripts
-  )
+  docker run --rm --user 1000:1000 --entrypoint sh \
+    --volume "${staging}/app:/work" --workdir /work "$GATEWAY_IMAGE" -c '
+      npm ci --legacy-peer-deps --include=dev --ignore-scripts &&
+      npm run build &&
+      npm prune --omit=dev --legacy-peer-deps --ignore-scripts
+    '
   install -d -o 1000 -g 1000 -m 0755 -- "${staging}/app/bin"
   install -o 1000 -g 1000 -m 0755 -- "${SCRIPT_DIR}/msc" \
     "${staging}/app/bin/msc"
