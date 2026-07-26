@@ -12,11 +12,10 @@ sudo /home/node/.openclaw/workspace/msc/projects/MSC-Event-CLI/deployment/approv
 ```
 
 Das Skript nutzt die bereits installierten MSC-Mailkonten und deren vorhandene
-Secret-Dateien. Neu abgefragt wird nur ein mindestens 16 Zeichen langes
-Passwort, das den privaten Freigabepfad zusätzlich vor dem Passkey schützt.
-Es baut ein unveränderlich gemountetes Produktionspaket, erzeugt getrennte
-Schlüssel, aktiviert das Plugin, richtet die Caddy-Pfadroute ein, erstellt nur
-den Gateway-Service neu und prüft Gateway, Plugin, Zugriffsschutz und Mail-Lesen.
+Secret-Dateien. Es fragt kein zusätzliches Passwort ab. Es baut ein
+unveränderlich gemountetes Produktionspaket, erzeugt getrennte Schlüssel,
+aktiviert das Plugin, richtet die Caddy-Pfadroute ein, erstellt nur den
+Gateway-Service neu und prüft Gateway, Plugin, HTTPS-Zugriff und Mail-Lesen.
 Zusätzlich steht danach im Gateway der Befehl `msc` für Lesen und das Anlegen
 eines konkreten Antwortentwurfs bereit.
 
@@ -26,3 +25,8 @@ eingeben und den Passkey einmalig anlegen.
 
 Keine Mail wird durch Installation oder Passkey-Einrichtung versendet. Jede
 Mail braucht einen konkreten Entwurf und eine eigene Passkey-Freigabe.
+
+Der Approval-Link enthält eine nicht erratbare Aktions-ID und wird nur über den
+privaten Telegram-Chat zugestellt. Wer den Link bewusst weitergibt, gibt damit
+auch die sichtbare Entwurfsvorschau weiter; ein Versand bleibt trotzdem ohne
+Vinzenz' registrierten Passkey beziehungsweise Face ID unmöglich.

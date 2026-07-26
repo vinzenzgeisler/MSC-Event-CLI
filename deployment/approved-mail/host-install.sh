@@ -32,7 +32,6 @@ CADDY_CONTAINER=""
 CADDY_IP=""
 PUBLIC_ORIGIN=""
 OPENCLAW_CONFIG=""
-APPROVAL_PASSWORD=""
 RUNTIME_USER=""
 ROLLBACK_ARMED=0
 
@@ -50,7 +49,6 @@ compose() {
 rollback() {
   local status=$?
   trap - EXIT INT TERM
-  unset APPROVAL_PASSWORD
   if ((status != 0 && ROLLBACK_ARMED == 1)); then
     printf '[msc-approved-mail] WARNUNG: Rollback wird ausgeführt.\n' >&2
     if [[ -f "${BACKUP_DIR}/openclaw.json" ]]; then
@@ -155,23 +153,6 @@ print("https://" + site[0].rstrip("/"))
     || die "Öffentliche HTTPS-Origin konnte nicht sicher erkannt werden."
   docker exec "$GATEWAY_CONTAINER" /usr/local/bin/msc-mail-readonly accounts \
     >/dev/null || die "Vorhandener Read-only-Mailzugriff ist nicht funktionsfähig."
-}
-
-prompt_password() {
-  local confirmation=""
-  while :; do
-    read -r -s -p "Neues Passwort für die private Freigabeseite: " APPROVAL_PASSWORD
-    printf '\n'
-    read -r -s -p "Passwort wiederholen: " confirmation
-    printf '\n'
-    [[ ${#APPROVAL_PASSWORD} -ge 16 ]] || {
-      printf 'Mindestens 16 Zeichen erforderlich.\n' >&2; continue;
-    }
-    [[ "$APPROVAL_PASSWORD" == "$confirmation" ]] || {
-      printf 'Passwörter stimmen nicht überein.\n' >&2; continue;
-    }
-    break
-  done
 }
 
 backup_current() {
@@ -327,12 +308,6 @@ PY
 }
 
 write_override() {
-  local password_hash compose_password_hash
-  password_hash="$(printf '%s' "$APPROVAL_PASSWORD" |
-    docker exec -i "$CADDY_CONTAINER" caddy hash-password)"
-  [[ "$password_hash" == \\$2* ]] || die "Caddy-Passworthash konnte nicht erzeugt werden."
-  compose_password_hash="$(printf '%s' "$password_hash" | sed 's/[$]/$$/g')"
-  unset APPROVAL_PASSWORD
   cat > "$OVERRIDE_FILE" <<EOF
 services:
   ${GATEWAY_SERVICE}:
@@ -349,10 +324,8 @@ services:
       - ${SECRET_ROOT}/msc-approved-mail-signing-key:/run/secrets/msc_approval_signing_key:ro
       - ${SECRET_ROOT}/msc-approved-mail-session-key:/run/secrets/msc_approval_session_key:ro
     labels:
-      caddy.route_0.0_basic_auth: "${PUBLIC_BASE_PATH}/*"
-      caddy.route_0.0_basic_auth.vinzenz: "${compose_password_hash}"
-      caddy.route_0.1_request_header: "${PUBLIC_BASE_PATH}/* X-MSC-Approval-Actor vinzenz"
-      caddy.route_0.2_reverse_proxy: "${PUBLIC_BASE_PATH}/* {{upstreams ${LISTENER_PORT}}}"
+      caddy.route_0.0_request_header: "${PUBLIC_BASE_PATH}/* X-MSC-Approval-Actor vinzenz"
+      caddy.route_0.1_reverse_proxy: "${PUBLIC_BASE_PATH}/* {{upstreams ${LISTENER_PORT}}}"
 EOF
   chown root:root "$OVERRIDE_FILE"
   chmod 0600 "$OVERRIDE_FILE"
@@ -380,8 +353,8 @@ activate_and_verify() {
   docker exec "$container" openclaw plugins inspect msc-approved-mail --runtime --json \
     >/dev/null || die "Produktionsplugin ist nicht aktiv."
   [[ "$(curl -sS -o /dev/null -w '%{http_code}' \
-    "${PUBLIC_ORIGIN}${PUBLIC_BASE_PATH}/register")" == 401 ]] \
-    || die "Freigabeseite ist ohne Anmeldung nicht zuverlässig geschützt."
+    "${PUBLIC_ORIGIN}${PUBLIC_BASE_PATH}/register")" == 200 ]] \
+    || die "Passkey-Einrichtungsseite ist über HTTPS nicht erreichbar."
   docker exec "$container" /usr/local/bin/msc-mail-readonly accounts \
     >/dev/null || die "Read-only-Mailzugriff ist nach Aktivierung gestört."
   ROLLBACK_ARMED=0
@@ -391,7 +364,6 @@ main() {
   (($# == 0)) || die "Das Skript akzeptiert keine Argumente."
   require_preflight
   detect_runtime
-  prompt_password
   backup_current
   build_application
   write_configuration
