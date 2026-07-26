@@ -13,7 +13,9 @@ sudo /home/node/.openclaw/workspace/msc/projects/MSC-Event-CLI/deployment/approv
 
 Das Skript nutzt die bereits installierten MSC-Mailkonten und deren vorhandene
 Secret-Dateien. Es fragt kein zusätzliches Passwort ab. Es baut ein
-unveränderlich gemountetes Produktionspaket, erzeugt getrennte Schlüssel,
+unveränderlich gemountetes Produktionspaket mit dem bereits laufenden
+OpenClaw-Gateway-Image; Node.js und npm müssen nicht zusätzlich auf dem
+Docker-Host installiert sein. Es erzeugt getrennte Schlüssel,
 aktiviert das Plugin, richtet die Caddy-Pfadroute ein, erstellt nur den
 Gateway-Service neu und prüft Gateway, Plugin, HTTPS-Zugriff und Mail-Lesen.
 Zusätzlich steht danach im Gateway der Befehl `msc` für Lesen und das Anlegen
