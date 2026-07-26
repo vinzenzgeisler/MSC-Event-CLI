@@ -218,3 +218,53 @@ test('fails closed without session, exact origin, CSRF token or matching passkey
     session,
   )).status, 400);
 });
+
+test('serves the complete contract below a non-reserved production base path', async () => {
+  const { queue, record } = await fixture();
+  const contract = new ApprovalHttpContract({
+    publicOrigin: origin,
+    basePath: '/msc-approval',
+    queue,
+    renderers: [new MailSendPreviewRenderer()],
+    async authorizeReviewer(actor) {
+      return actor === 'vinzenz';
+    },
+    async beginFreshAuth() {
+      throw new Error('not used');
+    },
+  });
+  assert.equal(
+    contract.approvalUrl(record.actionId),
+    `${origin}/msc-approval/approve/${record.actionId}`,
+  );
+  const page = await contract.handle(
+    new Request(contract.approvalUrl(record.actionId)),
+    session,
+  );
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /href="\/msc-approval\/assets\/approval\.css"/);
+  assert.match(html, /src="\/msc-approval\/assets\/approval\.js"/);
+  const script = await contract.handle(
+    new Request(`${origin}/msc-approval/assets/approval.js`),
+    session,
+  );
+  assert.equal(script.status, 200);
+  assert.match(await script.text(), /const basePath = "\/msc-approval"/);
+  assert.equal((await contract.handle(
+    new Request(`${origin}/approve/${record.actionId}`),
+    session,
+  )).status, 404);
+  assert.throws(() => new ApprovalHttpContract({
+    publicOrigin: origin,
+    basePath: '/msc-approval/',
+    queue,
+    renderers: [],
+    async authorizeReviewer() {
+      return true;
+    },
+    async beginFreshAuth() {
+      throw new Error('not used');
+    },
+  }), /basePath/);
+});

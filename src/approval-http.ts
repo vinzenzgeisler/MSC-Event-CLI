@@ -14,12 +14,19 @@ import {
 import type { BeginWebAuthnResult } from './webauthn.js';
 import {
   APPROVAL_CSS,
-  APPROVAL_JAVASCRIPT,
   renderApprovalHtml,
+  renderApprovalJavascript,
 } from './approval-ui.js';
 
 const actionIdSchema = z.string().uuid();
 const decisionSchema = z.enum(['approve', 'reject']);
+const basePathSchema = z.union([
+  z.literal(''),
+  z.string().regex(
+    /^\/[a-z0-9][a-z0-9._~-]*(?:\/[a-z0-9][a-z0-9._~-]*)*$/,
+    'basePath must be empty or an absolute path without a trailing slash',
+  ).max(200),
+]);
 
 export interface AuthenticatedApprovalSession {
   /** Supplied by trusted server middleware, never parsed from request input. */
@@ -37,6 +44,7 @@ export interface ApprovalPageModel {
 
 export interface ApprovalHttpContractOptions {
   publicOrigin: string;
+  basePath?: string;
   queue: ApprovalQueue;
   renderers: PreviewRenderer[];
   authorizeReviewer(actor: string, record: ApprovalRecord): Promise<boolean>;
@@ -83,6 +91,7 @@ const constantTimeEqual = (left: string, right: string): boolean => {
  */
 export class ApprovalHttpContract {
   private readonly publicOrigin: string;
+  private readonly basePath: string;
   private readonly renderers = new Map<string, PreviewRenderer>();
 
   constructor(private readonly options: ApprovalHttpContractOptions) {
@@ -92,6 +101,7 @@ export class ApprovalHttpContract {
       throw new Error('publicOrigin must be an exact HTTPS origin');
     }
     this.publicOrigin = origin.origin;
+    this.basePath = basePathSchema.parse(options.basePath ?? '');
     for (const renderer of options.renderers) {
       if (this.renderers.has(renderer.kind)) {
         throw new Error(`duplicate preview renderer for ${renderer.kind}`);
@@ -101,7 +111,7 @@ export class ApprovalHttpContract {
   }
 
   approvalUrl(actionId: string): string {
-    return `${this.publicOrigin}/approve/${actionIdSchema.parse(actionId)}`;
+    return `${this.publicOrigin}${this.basePath}/approve/${actionIdSchema.parse(actionId)}`;
   }
 
   async handle(
@@ -117,18 +127,23 @@ export class ApprovalHttpContract {
         return json(401, { error: 'authentication_required' });
       }
 
-      if (request.method === 'GET' && url.pathname === '/assets/approval.css') {
+      if (!url.pathname.startsWith(`${this.basePath}/`)) {
+        return json(404, { error: 'not_found' });
+      }
+      const pathname = url.pathname.slice(this.basePath.length);
+
+      if (request.method === 'GET' && pathname === '/assets/approval.css') {
         return response(200, APPROVAL_CSS, 'text/css; charset=utf-8');
       }
-      if (request.method === 'GET' && url.pathname === '/assets/approval.js') {
+      if (request.method === 'GET' && pathname === '/assets/approval.js') {
         return response(
           200,
-          APPROVAL_JAVASCRIPT,
+          renderApprovalJavascript(this.basePath),
           'text/javascript; charset=utf-8',
         );
       }
 
-      const reviewMatch = /^\/approve\/([^/]+)$/.exec(url.pathname);
+      const reviewMatch = /^\/approve\/([^/]+)$/.exec(pathname);
       if (request.method === 'GET' && reviewMatch) {
         await this.authorizedRecord(
           session.actor,
@@ -136,13 +151,13 @@ export class ApprovalHttpContract {
         );
         return response(
           200,
-          renderApprovalHtml(session.csrfToken),
+          renderApprovalHtml(session.csrfToken, this.basePath),
           'text/html; charset=utf-8',
           "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
         );
       }
 
-      const modelMatch = /^\/api\/approvals\/([^/]+)$/.exec(url.pathname);
+      const modelMatch = /^\/api\/approvals\/([^/]+)$/.exec(pathname);
       if (request.method === 'GET' && modelMatch) {
         const record = await this.authorizedRecord(
           session.actor,
@@ -151,7 +166,7 @@ export class ApprovalHttpContract {
         return json(200, this.pageModel(record));
       }
 
-      const beginMatch = /^\/api\/approvals\/([^/]+)\/webauthn$/.exec(url.pathname);
+      const beginMatch = /^\/api\/approvals\/([^/]+)\/webauthn$/.exec(pathname);
       if (request.method === 'POST' && beginMatch) {
         this.assertMutationRequest(request, session);
         const actionId = actionIdSchema.parse(decodeURIComponent(beginMatch[1]!));
@@ -168,7 +183,7 @@ export class ApprovalHttpContract {
         return json(200, ceremony);
       }
 
-      const decisionMatch = /^\/api\/approvals\/([^/]+)\/decision$/.exec(url.pathname);
+      const decisionMatch = /^\/api\/approvals\/([^/]+)\/decision$/.exec(pathname);
       if (request.method === 'POST' && decisionMatch) {
         this.assertMutationRequest(request, session);
         const actionId = actionIdSchema.parse(decodeURIComponent(decisionMatch[1]!));
