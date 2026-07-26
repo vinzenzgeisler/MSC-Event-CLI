@@ -447,7 +447,16 @@ providers. It does not call Himalaya, the Event API, or any production service.
   operator session alone is not treated as fresh authentication.
 - HMAC is sufficient for one trusted service boundary. Separate approval and
   execution services should use asymmetric signed proofs and key rotation.
-- Productive activation still needs trusted secret loading, the authenticated
-  listener/session adapter, worker lifecycle, operational reconciliation,
-  backup rehearsal, deployment and a separately approved test mail.
+- `MscOperationsHostRuntime` now supplies the explicit listener and worker
+  lifecycle around the already authenticated private HTTP adapter. Construction
+  remains inert. `start()` binds only the adapter's prevalidated private
+  address, starts a non-overlapping mail/event worker cadence and can require an
+  explicit initial cycle; `stop()` blocks new work, waits for an active cycle
+  and closes the listener. Listener startup failures roll back to the inactive
+  state, while one worker failure is reported without aborting the other
+  domain. The host still injects its trusted session resolver.
+- Productive activation still needs trusted secret loading, the concrete
+  authenticated session middleware, operational reconciliation, backup
+  rehearsal, deployment and a separately approved test mail. None of those
+  actions is performed by construction, build or test.
 - No existing read-only wrapper or `msc-mail` skill policy is changed.
