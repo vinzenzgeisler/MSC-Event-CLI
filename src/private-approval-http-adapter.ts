@@ -1,15 +1,19 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { isIP } from 'node:net';
-import type {
-  ApprovalHttpContract,
-  AuthenticatedApprovalSession,
-} from './approval-http.js';
+import type { AuthenticatedApprovalSession } from './approval-http.js';
+
+export interface ApprovalRequestHandler {
+  handle(
+    request: Request,
+    session?: AuthenticatedApprovalSession,
+  ): Promise<Response>;
+}
 
 export interface PrivateApprovalHttpAdapterOptions {
   bindAddress: string;
   port: number;
   publicOrigin: string;
-  contract: ApprovalHttpContract;
+  contract: ApprovalRequestHandler;
   resolveSession(
     request: IncomingMessage,
   ): Promise<AuthenticatedApprovalSession | undefined>;

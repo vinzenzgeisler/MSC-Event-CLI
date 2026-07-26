@@ -40,6 +40,12 @@ const configSchema = z.object({
   encryptionKeyFile: z.string().min(1),
   signingKeyFile: z.string().min(1),
   publicOrigin: exactHttpsOriginSchema,
+  basePath: z.union([
+    z.literal(''),
+    z.string().regex(
+      /^\/[a-z0-9][a-z0-9._~-]*(?:\/[a-z0-9][a-z0-9._~-]*)*$/,
+    ).max(200),
+  ]).default(''),
   mailPolicy: mscMailAccountPolicySchema,
 }).strict().superRefine((config, context) => {
   for (const field of [
@@ -164,13 +170,13 @@ const sourceFromEnvelope = (
 
 const proposal = (
   record: ApprovalRecord,
-  publicOrigin: string,
+  approvalBaseUrl: string,
   preview: ActionPreview,
 ): ApprovalProposalResult => ({
   actionId: record.actionId,
   status: 'pending',
   expiresAt: record.expiresAt,
-  approvalUrl: `${publicOrigin}/approve/${record.actionId}`,
+  approvalUrl: `${approvalBaseUrl}/approve/${record.actionId}`,
   payloadReference: record.payloadHash.slice(0, 12),
   preview,
 });
@@ -188,7 +194,7 @@ export class MscApprovalProposalWriter {
     private readonly event: MscEventReadonlyProvider,
     private readonly mail: MscMailReadonlyProvider,
     private readonly queue: ApprovalQueue,
-    private readonly publicOrigin: string,
+    private readonly approvalBaseUrl: string,
     private readonly mailPolicy: MscMailAccountPolicy,
   ) {}
 
@@ -211,7 +217,7 @@ export class MscApprovalProposalWriter {
     );
     return proposal(
       record,
-      this.publicOrigin,
+      this.approvalBaseUrl,
       this.eventRenderer.render(intent),
     );
   }
@@ -246,14 +252,17 @@ export class MscApprovalProposalWriter {
     );
     return proposal(
       record,
-      this.publicOrigin,
+      this.approvalBaseUrl,
       this.mailRenderer.render(intent),
     );
   }
 }
 
 export interface OpenMscApprovalProposalWriterOptions {
+  /** @deprecated Use configOwnerUid and secretOwnerUid for new callers. */
   expectedOwnerUid?: number;
+  configOwnerUid?: number;
+  secretOwnerUid?: number;
   event: MscEventReadonlyProvider;
   mail: MscMailReadonlyProvider;
 }
@@ -262,14 +271,17 @@ export const openMscApprovalProposalWriter = async (
   configPath: string,
   options: OpenMscApprovalProposalWriterOptions,
 ): Promise<{ writer: MscApprovalProposalWriter; close(): void }> => {
-  const expectedOwnerUid = options.expectedOwnerUid ?? 0;
+  const configOwnerUid = options.configOwnerUid ??
+    options.expectedOwnerUid ?? 0;
+  const secretOwnerUid = options.secretOwnerUid ??
+    options.expectedOwnerUid ?? process.getuid?.() ?? 0;
   const config = await loadMscApprovalProposalConfig(
     configPath,
-    expectedOwnerUid,
+    configOwnerUid,
   );
   const [encryptionKey, signingKey] = await Promise.all([
-    loadPrivateMscApprovalKey(config.encryptionKeyFile, expectedOwnerUid),
-    loadPrivateMscApprovalKey(config.signingKeyFile, expectedOwnerUid),
+    loadPrivateMscApprovalKey(config.encryptionKeyFile, secretOwnerUid),
+    loadPrivateMscApprovalKey(config.signingKeyFile, secretOwnerUid),
   ]);
   const store = new SqliteApprovalStore(config.stateDatabasePath, {
     encryptionKey,
@@ -288,7 +300,7 @@ export const openMscApprovalProposalWriter = async (
       options.event,
       options.mail,
       queue,
-      config.publicOrigin,
+      `${config.publicOrigin}${config.basePath}`,
       config.mailPolicy,
     ),
     close: () => store.close(),

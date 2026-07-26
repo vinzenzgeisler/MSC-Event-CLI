@@ -17,6 +17,7 @@ export interface MscApprovalReviewCompositionOptions {
   encryptionKey: Uint8Array;
   signingKey: Buffer;
   publicOrigin: string;
+  basePath?: string;
   rpId: string;
   expectedOrigins: string[];
   authorizeReviewer(
@@ -78,6 +79,7 @@ export class MscApprovalReviewComposition {
       });
       this.http = new ApprovalHttpContract({
         publicOrigin: options.publicOrigin,
+        ...(options.basePath === undefined ? {} : { basePath: options.basePath }),
         queue: this.queue,
         renderers: [
           new EventEntryChangePreviewRenderer(),

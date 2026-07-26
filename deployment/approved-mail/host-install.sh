@@ -1,0 +1,411 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+umask 077
+
+readonly SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+readonly SOURCE_ROOT="$(CDPATH= cd -- "${SCRIPT_DIR}/../.." && pwd)"
+readonly INSTALL_ROOT="/root/openclaw-config/msc-approved-mail"
+readonly SECRET_ROOT="/root/openclaw-secrets"
+readonly APP_ROOT="${INSTALL_ROOT}/app"
+readonly STATE_ROOT="${INSTALL_ROOT}/state"
+readonly PRODUCTION_CONFIG="${INSTALL_ROOT}/production.json"
+readonly PROPOSAL_CONFIG="${INSTALL_ROOT}/proposal.json"
+readonly BOOTSTRAP_CONFIG="${INSTALL_ROOT}/bootstrap.json"
+readonly OVERRIDE_FILE="${INSTALL_ROOT}/compose.approved-mail.override.yml"
+readonly TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+readonly BACKUP_ROOT="${SECRET_ROOT}/.msc-approved-mail-deployments"
+readonly BACKUP_DIR="${BACKUP_ROOT}/${TIMESTAMP}"
+readonly CONTAINER_APP="/opt/msc-approved-mail"
+readonly CONTAINER_CONFIG="/etc/msc-approved-mail"
+readonly CONTAINER_STATE="/var/lib/msc-approved-mail"
+readonly PUBLIC_BASE_PATH="/msc-approval"
+readonly LISTENER_PORT=18443
+
+declare -a COMPOSE=()
+declare -a COMPOSE_FILES=()
+GATEWAY_CONTAINER=""
+GATEWAY_SERVICE=""
+PROJECT_NAME=""
+PROJECT_DIR=""
+CADDY_CONTAINER=""
+CADDY_IP=""
+PUBLIC_ORIGIN=""
+OPENCLAW_CONFIG=""
+APPROVAL_PASSWORD=""
+RUNTIME_USER=""
+ROLLBACK_ARMED=0
+
+log() { printf '[msc-approved-mail] %s\n' "$1"; }
+die() { printf '[msc-approved-mail] FEHLER: %s\n' "$1" >&2; exit 1; }
+
+compose() {
+  local -a command=("${COMPOSE[@]}" --project-directory "$PROJECT_DIR" -p "$PROJECT_NAME")
+  local file
+  for file in "${COMPOSE_FILES[@]}"; do command+=(-f "$file"); done
+  command+=(-f "$OVERRIDE_FILE")
+  "${command[@]}" "$@"
+}
+
+rollback() {
+  local status=$?
+  trap - EXIT INT TERM
+  unset APPROVAL_PASSWORD
+  if ((status != 0 && ROLLBACK_ARMED == 1)); then
+    printf '[msc-approved-mail] WARNUNG: Rollback wird ausgeführt.\n' >&2
+    if [[ -f "${BACKUP_DIR}/openclaw.json" ]]; then
+      cp -a -- "${BACKUP_DIR}/openclaw.json" "$OPENCLAW_CONFIG"
+    fi
+    if [[ -d "${BACKUP_DIR}/install-root" ]]; then
+      rm -rf -- "$INSTALL_ROOT"
+      cp -a -- "${BACKUP_DIR}/install-root" "$INSTALL_ROOT"
+    else
+      rm -rf -- "$INSTALL_ROOT"
+    fi
+    local -a original=("${COMPOSE[@]}" --project-directory "$PROJECT_DIR" -p "$PROJECT_NAME")
+    local file
+    for file in "${COMPOSE_FILES[@]}"; do original+=(-f "$file"); done
+    "${original[@]}" up -d --no-deps --force-recreate "$GATEWAY_SERVICE" \
+      >/dev/null 2>&1 || true
+  fi
+  exit "$status"
+}
+trap rollback EXIT INT TERM
+
+require_preflight() {
+  [[ "$(id -u)" == 0 ]] || die "Bitte als root ausführen."
+  for command in docker python3 node npm openssl install cp mv stat readlink curl \
+    getent runuser; do
+    command -v "$command" >/dev/null 2>&1 || die "Befehl fehlt: $command"
+  done
+  [[ -f "${SOURCE_ROOT}/package.json" && -f "${SOURCE_ROOT}/plugin/production.mjs" ]] \
+    || die "Produktionsquellen fehlen."
+  [[ -x "/usr/local/bin/msc-mail-readonly" || -x "${SOURCE_ROOT}/../../deployment/msc-mail/msc-mail-readonly" ]] \
+    || log "Read-only-Wrapper wird im laufenden Gateway geprüft."
+  if docker compose version >/dev/null 2>&1; then COMPOSE=(docker compose)
+  elif command -v docker-compose >/dev/null 2>&1; then COMPOSE=(docker-compose)
+  else die "Docker Compose fehlt."; fi
+  docker info >/dev/null 2>&1 || die "Docker ist nicht erreichbar."
+  RUNTIME_USER="$(getent passwd 1000 | cut -d: -f1)"
+  [[ -n "$RUNTIME_USER" ]] || die "Runtime-Benutzer mit UID 1000 fehlt."
+}
+
+detect_runtime() {
+  local row candidates=""
+  while IFS= read -r id; do
+    row="$(docker inspect --format \
+      '{{.Id}}{{"\t"}}{{index .Config.Labels "com.docker.compose.service"}}{{"\t"}}{{index .Config.Labels "com.docker.compose.project"}}{{"\t"}}{{index .Config.Labels "com.docker.compose.project.working_dir"}}{{"\t"}}{{index .Config.Labels "com.docker.compose.project.config_files"}}{{"\t"}}{{.Config.Image}}' "$id")"
+    if [[ "${row,,}" == *gateway* && "${row,,}" == *openclaw* ]]; then
+      candidates+="${row}"$'\n'
+    fi
+  done < <(docker ps -q)
+  mapfile -t rows < <(printf '%s' "$candidates" | sed '/^$/d')
+  ((${#rows[@]} == 1)) || die "OpenClaw-Gateway ist nicht eindeutig."
+  local files image
+  IFS=$'\t' read -r GATEWAY_CONTAINER GATEWAY_SERVICE PROJECT_NAME \
+    PROJECT_DIR files image <<< "${rows[0]}"
+  local file
+  IFS=',' read -r -a raw_files <<< "$files"
+  for file in "${raw_files[@]}"; do
+    [[ "$file" == /* ]] || file="${PROJECT_DIR}/${file}"
+    file="$(readlink -f -- "$file")"
+    [[ -f "$file" ]] || die "Compose-Datei fehlt: $file"
+    COMPOSE_FILES+=("$file")
+  done
+
+  OPENCLAW_CONFIG="$(docker inspect "$GATEWAY_CONTAINER" | python3 -c '
+import json, sys
+data=json.load(sys.stdin)[0]
+for mount in data.get("Mounts", []):
+    if mount.get("Destination") == "/home/node/.openclaw":
+        print(mount["Source"].rstrip("/") + "/openclaw.json")
+        break
+')"
+  [[ -f "$OPENCLAW_CONFIG" ]] || die "OpenClaw-Konfiguration wurde nicht gefunden."
+
+  CADDY_CONTAINER="$(docker ps --format '{{.ID}}\t{{.Image}}\t{{.Names}}' |
+    awk 'tolower($0) ~ /caddy/ {print $1}')"
+  [[ "$(wc -w <<< "$CADDY_CONTAINER")" == 1 ]] || die "Caddy ist nicht eindeutig."
+  CADDY_IP="$(docker inspect "$CADDY_CONTAINER" "$GATEWAY_CONTAINER" | python3 -c '
+import ipaddress, json, sys
+caddy, gateway=json.load(sys.stdin)
+caddy_networks=caddy["NetworkSettings"]["Networks"]
+gateway_networks=gateway["NetworkSettings"]["Networks"]
+values=[
+    caddy_networks[name].get("IPAddress")
+    for name in sorted(set(caddy_networks) & set(gateway_networks))
+]
+values=[
+    value for value in values
+    if value and ipaddress.ip_address(value).is_private
+]
+if len(set(values)) != 1:
+    raise SystemExit(1)
+print(values[0])
+')"
+  PUBLIC_ORIGIN="$(docker inspect "$GATEWAY_CONTAINER" | python3 -c '
+import json, sys
+labels=json.load(sys.stdin)[0]["Config"].get("Labels") or {}
+site=labels.get("caddy", "").strip().split()
+if len(site) != 1 or site[0].startswith(":"):
+    raise SystemExit(1)
+print("https://" + site[0].rstrip("/"))
+')"
+  [[ "$PUBLIC_ORIGIN" =~ ^https://[A-Za-z0-9.-]+$ ]] \
+    || die "Öffentliche HTTPS-Origin konnte nicht sicher erkannt werden."
+  docker exec "$GATEWAY_CONTAINER" /usr/local/bin/msc-mail-readonly accounts \
+    >/dev/null || die "Vorhandener Read-only-Mailzugriff ist nicht funktionsfähig."
+}
+
+prompt_password() {
+  local confirmation=""
+  while :; do
+    read -r -s -p "Neues Passwort für die private Freigabeseite: " APPROVAL_PASSWORD
+    printf '\n'
+    read -r -s -p "Passwort wiederholen: " confirmation
+    printf '\n'
+    [[ ${#APPROVAL_PASSWORD} -ge 16 ]] || {
+      printf 'Mindestens 16 Zeichen erforderlich.\n' >&2; continue;
+    }
+    [[ "$APPROVAL_PASSWORD" == "$confirmation" ]] || {
+      printf 'Passwörter stimmen nicht überein.\n' >&2; continue;
+    }
+    break
+  done
+}
+
+backup_current() {
+  install -d -o root -g root -m 0700 -- "$BACKUP_DIR"
+  cp -a -- "$OPENCLAW_CONFIG" "${BACKUP_DIR}/openclaw.json"
+  if [[ -d "$INSTALL_ROOT" ]]; then
+    cp -a -- "$INSTALL_ROOT" "${BACKUP_DIR}/install-root"
+  fi
+  ROLLBACK_ARMED=1
+}
+
+build_application() {
+  local staging
+  staging="$(mktemp -d -p /root msc-approved-mail-build-XXXXXX)"
+  install -d -o 1000 -g 1000 -m 0750 -- "${staging}/app"
+  cp -a -- "${SOURCE_ROOT}/package.json" "${SOURCE_ROOT}/package-lock.json" \
+    "${SOURCE_ROOT}/tsconfig.json" "${SOURCE_ROOT}/src" "${SOURCE_ROOT}/plugin" \
+    "${staging}/app/"
+  chown -R 1000:1000 -- "${staging}/app"
+  (
+    cd "${staging}/app"
+    runuser -u "$RUNTIME_USER" -- npm ci --legacy-peer-deps --include=dev --ignore-scripts
+    runuser -u "$RUNTIME_USER" -- npm run build
+    runuser -u "$RUNTIME_USER" -- npm prune --omit=dev --legacy-peer-deps --ignore-scripts
+  )
+  install -d -o 1000 -g 1000 -m 0755 -- "${staging}/app/bin"
+  install -o 1000 -g 1000 -m 0755 -- "${SCRIPT_DIR}/msc" \
+    "${staging}/app/bin/msc"
+  rm -rf -- "$APP_ROOT"
+  install -d -o root -g root -m 0755 -- "$INSTALL_ROOT"
+  mv -- "${staging}/app" "$APP_ROOT"
+  chown -R root:root -- "$APP_ROOT"
+  chmod -R a-w -- "$APP_ROOT"
+  rm -rf -- "$staging"
+}
+
+write_configuration() {
+  install -d -o 1000 -g 1000 -m 0700 -- "$STATE_ROOT"
+  local key
+  for key in encryption signing session; do
+    if [[ ! -f "${SECRET_ROOT}/msc-approved-mail-${key}-key" ]]; then
+      openssl rand -base64 32 |
+        install -o 1000 -g 1000 -m 0400 /dev/stdin \
+          "${SECRET_ROOT}/msc-approved-mail-${key}-key"
+    fi
+  done
+  python3 - "$PUBLIC_ORIGIN" "$CADDY_IP" "$PRODUCTION_CONFIG" \
+    "$PROPOSAL_CONFIG" "$BOOTSTRAP_CONFIG" <<'PY'
+import json, sys, tomllib
+origin, proxy, production_path, proposal_path, bootstrap_path = sys.argv[1:]
+with open("/root/openclaw-config/msc-mail/accounts.toml", "rb") as handle:
+    source = tomllib.load(handle)
+entries = source.get("accounts", [])
+confirmed = {
+    "msc-nennung": ("nennung@msc-oberlausitzer-dreilaendereck.eu", "MSC Nennung"),
+    "msc-info": ("info@msc-oberlausitzer-dreilaendereck.eu", "MSC Info"),
+    "msc-vorstand": ("admin@msc-oberlausitzer-dreilaendereck.eu", "MSC Vorstand"),
+}
+accounts = {
+    name: {
+        "active": False,
+        "senderIdentity": identity,
+        "displayName": display,
+        "allowedFolders": ["INBOX"],
+    }
+    for name, (identity, display) in confirmed.items()
+}
+smtp = []
+for item in entries:
+    name = item["name"]
+    sender = item["sender_identity"]
+    accounts[name] = {
+        "active": True,
+        "senderIdentity": sender,
+        "displayName": item["display_name"],
+        "allowedFolders": ["INBOX"],
+    }
+    smtp.append({
+        "account": name,
+        "host": "smtp.strato.de",
+        "port": 465,
+        "secure": True,
+        "username": sender,
+        "passwordFile": f"/run/secrets/{name.replace('-', '_')}_password",
+        "senderIdentity": sender,
+    })
+policy = {"version": 1, "accounts": accounts}
+shared = {
+    "version": 1,
+    "stateDatabasePath": "/var/lib/msc-approved-mail/state.sqlite",
+    "encryptionKeyFile": "/run/secrets/msc_approval_encryption_key",
+    "signingKeyFile": "/run/secrets/msc_approval_signing_key",
+    "publicOrigin": origin,
+    "basePath": "/msc-approval",
+    "mailPolicy": policy,
+}
+production = {
+    **shared,
+    "sessionCsrfKeyFile": "/run/secrets/msc_approval_session_key",
+    "rpId": origin.removeprefix("https://"),
+    "reviewerActor": "vinzenz",
+    "trustedProxyAddresses": [proxy],
+    "bindInterface": "eth0",
+    "port": 18443,
+    "workerIntervalMs": 5000,
+    "workerId": "msc-approved-mail-production",
+    "messageIdDomain": origin.removeprefix("https://"),
+    "smtpAccounts": smtp,
+}
+bootstrap = {
+    "version": 1,
+    "stateDatabasePath": shared["stateDatabasePath"],
+    "allowedOperatorUids": [1000],
+    "allowedActors": ["vinzenz"],
+    "bootstrapTtlSeconds": 600,
+}
+for path, value in (
+    (production_path, production),
+    (proposal_path, shared),
+    (bootstrap_path, bootstrap),
+):
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(value, handle, indent=2)
+        handle.write("\n")
+PY
+  chown root:1000 "$PRODUCTION_CONFIG" "$PROPOSAL_CONFIG" "$BOOTSTRAP_CONFIG"
+  chmod 0440 "$PRODUCTION_CONFIG" "$PROPOSAL_CONFIG" "$BOOTSTRAP_CONFIG"
+}
+
+enable_plugin() {
+  python3 - "$OPENCLAW_CONFIG" <<'PY'
+import json, sys
+path=sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    config=json.load(handle)
+plugins=config.setdefault("plugins", {})
+paths=plugins.setdefault("load", {}).setdefault("paths", [])
+entry="/opt/msc-approved-mail/plugin/production.mjs"
+if entry not in paths:
+    paths.append(entry)
+plugins.setdefault("entries", {}).setdefault("msc-approved-mail", {})["enabled"]=True
+allow=plugins.get("allow")
+if isinstance(allow, list) and "msc-approved-mail" not in allow:
+    allow.append("msc-approved-mail")
+temporary=path+".msc-approved-mail.tmp"
+with open(temporary, "w", encoding="utf-8") as handle:
+    json.dump(config, handle, indent=2)
+    handle.write("\n")
+import os
+os.chmod(temporary, 0o600)
+os.replace(temporary, path)
+PY
+}
+
+write_override() {
+  local password_hash compose_password_hash
+  password_hash="$(printf '%s' "$APPROVAL_PASSWORD" |
+    docker exec -i "$CADDY_CONTAINER" caddy hash-password)"
+  [[ "$password_hash" == \\$2* ]] || die "Caddy-Passworthash konnte nicht erzeugt werden."
+  compose_password_hash="$(printf '%s' "$password_hash" | sed 's/[$]/$$/g')"
+  unset APPROVAL_PASSWORD
+  cat > "$OVERRIDE_FILE" <<EOF
+services:
+  ${GATEWAY_SERVICE}:
+    environment:
+      MSC_APPROVED_ACTIONS_CONFIG: ${CONTAINER_CONFIG}/production.json
+    volumes:
+      - ${APP_ROOT}:${CONTAINER_APP}:ro
+      - ${APP_ROOT}/bin/msc:/usr/local/bin/msc:ro
+      - ${PRODUCTION_CONFIG}:${CONTAINER_CONFIG}/production.json:ro
+      - ${PROPOSAL_CONFIG}:${CONTAINER_CONFIG}/proposal.json:ro
+      - ${BOOTSTRAP_CONFIG}:${CONTAINER_CONFIG}/bootstrap.json:ro
+      - ${STATE_ROOT}:${CONTAINER_STATE}:rw
+      - ${SECRET_ROOT}/msc-approved-mail-encryption-key:/run/secrets/msc_approval_encryption_key:ro
+      - ${SECRET_ROOT}/msc-approved-mail-signing-key:/run/secrets/msc_approval_signing_key:ro
+      - ${SECRET_ROOT}/msc-approved-mail-session-key:/run/secrets/msc_approval_session_key:ro
+    labels:
+      caddy.route_0.0_basic_auth: "${PUBLIC_BASE_PATH}/*"
+      caddy.route_0.0_basic_auth.vinzenz: "${compose_password_hash}"
+      caddy.route_0.1_request_header: "${PUBLIC_BASE_PATH}/* X-MSC-Approval-Actor vinzenz"
+      caddy.route_0.2_reverse_proxy: "${PUBLIC_BASE_PATH}/* {{upstreams ${LISTENER_PORT}}}"
+EOF
+  chown root:root "$OVERRIDE_FILE"
+  chmod 0600 "$OVERRIDE_FILE"
+}
+
+activate_and_verify() {
+  compose config --quiet
+  log "Gateway wird genau einmal mit dem freigegebenen Dienst neu erstellt."
+  compose up -d --no-deps --force-recreate "$GATEWAY_SERVICE"
+  local deadline=$((SECONDS + 180)) container health=""
+  while ((SECONDS < deadline)); do
+    container="$(compose ps -q "$GATEWAY_SERVICE" 2>/dev/null || true)"
+    if [[ -n "$container" ]]; then
+      health="$(docker inspect -f \
+        '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")"
+      [[ "$health" == healthy ]] && break
+      if [[ "$health" == none ]] && docker exec "$container" openclaw health \
+        >/dev/null 2>&1; then break; fi
+      [[ "$health" == unhealthy ]] && die "Gateway ist unhealthy."
+    fi
+    sleep 2
+  done
+  [[ -n "$container" ]] || die "Gateway wurde nicht gestartet."
+  GATEWAY_CONTAINER="$container"
+  docker exec "$container" openclaw plugins inspect msc-approved-mail --runtime --json \
+    >/dev/null || die "Produktionsplugin ist nicht aktiv."
+  [[ "$(curl -sS -o /dev/null -w '%{http_code}' \
+    "${PUBLIC_ORIGIN}${PUBLIC_BASE_PATH}/register")" == 401 ]] \
+    || die "Freigabeseite ist ohne Anmeldung nicht zuverlässig geschützt."
+  docker exec "$container" /usr/local/bin/msc-mail-readonly accounts \
+    >/dev/null || die "Read-only-Mailzugriff ist nach Aktivierung gestört."
+  ROLLBACK_ARMED=0
+}
+
+main() {
+  (($# == 0)) || die "Das Skript akzeptiert keine Argumente."
+  require_preflight
+  detect_runtime
+  prompt_password
+  backup_current
+  build_application
+  write_configuration
+  enable_plugin
+  write_override
+  activate_and_verify
+  printf '\nMSC-Mail-Freigabedienst ist aktiv.\n'
+  printf 'Passkey-Seite: %s%s/register\n' "$PUBLIC_ORIGIN" "$PUBLIC_BASE_PATH"
+  printf 'Bootstrap-Code erzeugen:\n'
+  printf 'docker exec -u 1000 %s node %s/dist/src/passkey-bootstrap-operator-cli.js --config %s/bootstrap.json --actor vinzenz\n' \
+    "$GATEWAY_CONTAINER" "$CONTAINER_APP" "$CONTAINER_CONFIG"
+  printf 'Antworten vorbereiten mit: msc mail reply --config %s/proposal.json ...\n' \
+    "$CONTAINER_CONFIG"
+  printf 'Backup: %s\n' "$BACKUP_DIR"
+}
+
+main "$@"

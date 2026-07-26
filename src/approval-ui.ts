@@ -4,7 +4,15 @@ const escapeAttribute = (value: string): string => value
   .replaceAll('<', '&lt;')
   .replaceAll('>', '&gt;');
 
-export const renderApprovalHtml = (csrfToken: string): string => `<!doctype html>
+const safeBasePath = (value: string): string => value === '' ||
+  /^\/[a-z0-9][a-z0-9._~-]*(?:\/[a-z0-9][a-z0-9._~-]*)*$/.test(value)
+  ? value
+  : (() => { throw new Error('invalid approval UI base path'); })();
+
+export const renderApprovalHtml = (
+  csrfToken: string,
+  basePath = '',
+): string => `<!doctype html>
 <html lang="de">
 <head>
   <meta charset="utf-8">
@@ -12,7 +20,7 @@ export const renderApprovalHtml = (csrfToken: string): string => `<!doctype html
   <meta name="referrer" content="no-referrer">
   <meta name="approval-csrf" content="${escapeAttribute(csrfToken)}">
   <title>MSC-Aktion freigeben</title>
-  <link rel="stylesheet" href="/assets/approval.css">
+  <link rel="stylesheet" href="${safeBasePath(basePath)}/assets/approval.css">
 </head>
 <body>
   <main>
@@ -33,7 +41,7 @@ export const renderApprovalHtml = (csrfToken: string): string => `<!doctype html
     </div>
     <p class="notice">Jede Entscheidung gilt nur für die oben angezeigte Aktion.</p>
   </main>
-  <script src="/assets/approval.js" defer></script>
+  <script src="${safeBasePath(basePath)}/assets/approval.js" defer></script>
 </body>
 </html>`;
 
@@ -93,10 +101,12 @@ button:disabled { opacity: .55; }
 }
 `;
 
-export const APPROVAL_JAVASCRIPT = `
+export const renderApprovalJavascript = (basePath = ''): string => `
 (() => {
   'use strict';
-  const parts = location.pathname.split('/').filter(Boolean);
+  const basePath = ${JSON.stringify(safeBasePath(basePath))};
+  const relativePath = location.pathname.slice(basePath.length);
+  const parts = relativePath.split('/').filter(Boolean);
   const actionId = parts.length === 2 && parts[0] === 'approve' ? parts[1] : '';
   const csrf = document.querySelector('meta[name="approval-csrf"]')?.content ?? '';
   const title = document.getElementById('title');
@@ -173,7 +183,7 @@ export const APPROVAL_JAVASCRIPT = `
         throw new Error('passkey_unavailable');
       }
       const ceremony = await requestJson(
-        '/api/approvals/' + encodeURIComponent(actionId) + '/webauthn',
+        basePath + '/api/approvals/' + encodeURIComponent(actionId) + '/webauthn',
         {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-csrf-token': csrf },
@@ -185,7 +195,7 @@ export const APPROVAL_JAVASCRIPT = `
       });
       if (!credential) throw new Error('passkey_cancelled');
       const result = await requestJson(
-        '/api/approvals/' + encodeURIComponent(actionId) + '/decision',
+        basePath + '/api/approvals/' + encodeURIComponent(actionId) + '/decision',
         {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-csrf-token': csrf },
@@ -200,7 +210,7 @@ export const APPROVAL_JAVASCRIPT = `
       );
       showStatus(
         result.status === 'approved'
-          ? 'Freigabe geprüft. Ausführung ist in diesem Prototyp deaktiviert.'
+          ? 'Freigabe geprüft. Die Aktion wird sicher verarbeitet.'
           : 'Aktion wurde abgelehnt.',
       );
     } catch {
@@ -216,7 +226,7 @@ export const APPROVAL_JAVASCRIPT = `
   }
   approve.addEventListener('click', () => void decide('approve'));
   reject.addEventListener('click', () => void decide('reject'));
-  requestJson('/api/approvals/' + encodeURIComponent(actionId))
+  requestJson(basePath + '/api/approvals/' + encodeURIComponent(actionId))
     .then((model) => {
       title.textContent = model.preview.title;
       summary.textContent = model.preview.summary;
@@ -238,3 +248,5 @@ export const APPROVAL_JAVASCRIPT = `
     });
 })();
 `;
+
+export const APPROVAL_JAVASCRIPT = renderApprovalJavascript();

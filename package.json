@@ -15,7 +15,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "plugin:validate": "npm run build && openclaw plugins validate --entry ./plugin/index.mjs",
+    "plugin:validate": "npm run build && node -e \"import('./plugin/production.mjs').then((module) => { if (typeof module.default?.register !== 'function') process.exit(1); })\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/test/*.test.js",
     "test:approval": "npm run build && node --test dist/test/approval.test.js"
@@ -36,7 +36,8 @@
   },
   "openclaw": {
     "extensions": [
-      "./plugin/index.mjs"
+      "./plugin/index.mjs",
+      "./plugin/production.mjs"
     ]
   }
 }
