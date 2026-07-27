@@ -1,4 +1,6 @@
+import json
 import os
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -67,6 +69,67 @@ if wait_for_gateway_health 1; then exit 9; fi
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Gateway-Diagnose nach Zeitüberschreitung", result.stderr)
+
+    def test_empty_compose_directory_placeholders_are_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            production = root / "production.json"
+            proposal = root / "proposal.json"
+            bootstrap = root / "bootstrap.json"
+            production.mkdir()
+            proposal.write_text("{}\n", encoding="utf-8")
+            bootstrap.mkdir()
+            result = self.run_bash(
+                f"""
+prepare_configuration_paths {production!s} {proposal!s} {bootstrap!s}
+[[ ! -e {production!s} ]]
+[[ -f {proposal!s} ]]
+[[ ! -e {bootstrap!s} ]]
+"""
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_nonempty_configuration_directory_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            production = root / "production.json"
+            proposal = root / "proposal.json"
+            bootstrap = root / "bootstrap.json"
+            production.mkdir()
+            Path(production, "unexpected").write_text("keep\n", encoding="utf-8")
+            result = self.run_bash(
+                f"""
+prepare_configuration_paths {production!s} {proposal!s} {bootstrap!s}
+"""
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("nichtleeres Verzeichnis", result.stderr)
+
+    def test_plugin_update_preserves_configuration_owner_and_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory, "openclaw.json")
+            config.write_text(
+                json.dumps({"plugins": {"allow": []}}),
+                encoding="utf-8",
+            )
+            config.chmod(0o640)
+            before = config.stat()
+            result = self.run_bash(f"enable_plugin {config!s}")
+            after = config.stat()
+            value = json.loads(config.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(after.st_uid, before.st_uid)
+        self.assertEqual(after.st_gid, before.st_gid)
+        self.assertEqual(stat.S_IMODE(after.st_mode), 0o640)
+        self.assertIn(
+            "/opt/msc-approved-mail/plugin/production.mjs",
+            value["plugins"]["load"]["paths"],
+        )
+        self.assertTrue(value["plugins"]["entries"]["msc-approved-mail"]["enabled"])
+        self.assertIn("msc-approved-mail", value["plugins"]["allow"])
 
 
 if __name__ == "__main__":
