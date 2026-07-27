@@ -77,7 +77,7 @@ rollback() {
 }
 require_preflight() {
   [[ "$(id -u)" == 0 ]] || die "Bitte als root ausführen."
-  for command in docker python3 openssl install cp mv stat readlink curl \
+  for command in docker python3 openssl install cp mv stat readlink curl rmdir \
     getent caddy systemctl; do
     command -v "$command" >/dev/null 2>&1 || die "Befehl fehlt: $command"
   done
@@ -211,8 +211,23 @@ build_application() {
   rm -rf -- "$staging"
 }
 
+prepare_configuration_paths() {
+  local path
+  for path in "$@"; do
+    [[ ! -L "$path" ]] || die "Konfigurationspfad ist ein Symlink: $path"
+    if [[ -d "$path" ]]; then
+      rmdir -- "$path" 2>/dev/null \
+        || die "Konfigurationspfad ist ein nichtleeres Verzeichnis: $path"
+    elif [[ -e "$path" && ! -f "$path" ]]; then
+      die "Konfigurationspfad ist keine reguläre Datei: $path"
+    fi
+  done
+}
+
 write_configuration() {
   install -d -o 1000 -g 1000 -m 0700 -- "$STATE_ROOT"
+  prepare_configuration_paths \
+    "$PRODUCTION_CONFIG" "$PROPOSAL_CONFIG" "$BOOTSTRAP_CONFIG"
   local key
   for key in encryption signing session; do
     if [[ ! -f "${SECRET_ROOT}/msc-approved-mail-${key}-key" ]]; then
@@ -305,9 +320,13 @@ PY
 }
 
 enable_plugin() {
-  python3 - "$OPENCLAW_CONFIG" <<'PY'
-import json, sys
+  local config_path="${1:-$OPENCLAW_CONFIG}"
+  python3 - "$config_path" <<'PY'
+import json, os, stat, sys
 path=sys.argv[1]
+metadata=os.stat(path, follow_symlinks=False)
+if not stat.S_ISREG(metadata.st_mode):
+    raise SystemExit("OpenClaw configuration is not a regular file")
 with open(path, encoding="utf-8") as handle:
     config=json.load(handle)
 plugins=config.setdefault("plugins", {})
@@ -319,13 +338,42 @@ plugins.setdefault("entries", {}).setdefault("msc-approved-mail", {})["enabled"]
 allow=plugins.get("allow")
 if isinstance(allow, list) and "msc-approved-mail" not in allow:
     allow.append("msc-approved-mail")
-temporary=path+".msc-approved-mail.tmp"
-with open(temporary, "w", encoding="utf-8") as handle:
-    json.dump(config, handle, indent=2)
-    handle.write("\n")
-import os
-os.chmod(temporary, 0o600)
-os.replace(temporary, path)
+temporary=f"{path}.msc-approved-mail.tmp.{os.getpid()}"
+flags=os.O_WRONLY | os.O_CREAT | os.O_EXCL
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+try:
+    descriptor=os.open(temporary, flags, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(config, handle, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chown(
+        temporary,
+        metadata.st_uid,
+        metadata.st_gid,
+        follow_symlinks=False,
+    )
+    os.chmod(
+        temporary,
+        stat.S_IMODE(metadata.st_mode),
+        follow_symlinks=False,
+    )
+    os.replace(temporary, path)
+    directory=os.open(
+        os.path.dirname(path) or ".",
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
 PY
 }
 
