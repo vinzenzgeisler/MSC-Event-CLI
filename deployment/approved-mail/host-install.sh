@@ -21,6 +21,7 @@ readonly CONTAINER_CONFIG="/etc/msc-approved-mail"
 readonly CONTAINER_STATE="/var/lib/msc-approved-mail"
 readonly PUBLIC_BASE_PATH="/msc-approval"
 readonly LISTENER_PORT=18443
+readonly CADDY_CONFIG="/etc/caddy/Caddyfile"
 
 declare -a COMPOSE=()
 declare -a COMPOSE_FILES=()
@@ -29,8 +30,7 @@ GATEWAY_SERVICE=""
 GATEWAY_IMAGE=""
 PROJECT_NAME=""
 PROJECT_DIR=""
-CADDY_CONTAINER=""
-CADDY_IP=""
+TRUSTED_PROXY_IP=""
 PUBLIC_ORIGIN=""
 OPENCLAW_CONFIG=""
 RUNTIME_USER=""
@@ -55,6 +55,9 @@ rollback() {
     if [[ -f "${BACKUP_DIR}/openclaw.json" ]]; then
       cp -a -- "${BACKUP_DIR}/openclaw.json" "$OPENCLAW_CONFIG"
     fi
+    if [[ -f "${BACKUP_DIR}/Caddyfile" ]]; then
+      cp -a -- "${BACKUP_DIR}/Caddyfile" "$CADDY_CONFIG"
+    fi
     if [[ -d "${BACKUP_DIR}/install-root" ]]; then
       rm -rf -- "$INSTALL_ROOT"
       cp -a -- "${BACKUP_DIR}/install-root" "$INSTALL_ROOT"
@@ -66,6 +69,9 @@ rollback() {
     for file in "${COMPOSE_FILES[@]}"; do original+=(-f "$file"); done
     "${original[@]}" up -d --no-deps --force-recreate "$GATEWAY_SERVICE" \
       >/dev/null 2>&1 || true
+    if [[ -f "${BACKUP_DIR}/Caddyfile" ]]; then
+      caddy reload --config "$CADDY_CONFIG" >/dev/null 2>&1 || true
+    fi
   fi
   exit "$status"
 }
@@ -74,7 +80,7 @@ trap rollback EXIT INT TERM
 require_preflight() {
   [[ "$(id -u)" == 0 ]] || die "Bitte als root ausführen."
   for command in docker python3 openssl install cp mv stat readlink curl \
-    getent; do
+    getent caddy systemctl; do
     command -v "$command" >/dev/null 2>&1 || die "Befehl fehlt: $command"
   done
   [[ -f "${SOURCE_ROOT}/package.json" && -f "${SOURCE_ROOT}/plugin/production.mjs" ]] \
@@ -85,6 +91,11 @@ require_preflight() {
   elif command -v docker-compose >/dev/null 2>&1; then COMPOSE=(docker-compose)
   else die "Docker Compose fehlt."; fi
   docker info >/dev/null 2>&1 || die "Docker ist nicht erreichbar."
+  systemctl is-active --quiet caddy || die "Caddy-Systemdienst ist nicht aktiv."
+  [[ -f "$CADDY_CONFIG" && ! -L "$CADDY_CONFIG" ]] \
+    || die "Caddy-Konfiguration fehlt oder ist ein Symlink."
+  caddy validate --config "$CADDY_CONFIG" >/dev/null \
+    || die "Bestehende Caddy-Konfiguration ist ungültig."
   RUNTIME_USER="$(getent passwd 1000 | cut -d: -f1)"
   [[ -n "$RUNTIME_USER" ]] || die "Runtime-Benutzer mit UID 1000 fehlt."
 }
@@ -125,17 +136,12 @@ for mount in data.get("Mounts", []):
     'command -v node >/dev/null && command -v npm >/dev/null' \
     || die "Node.js und npm fehlen im OpenClaw-Gateway-Image."
 
-  CADDY_CONTAINER="$(docker ps --format '{{.ID}}\t{{.Image}}\t{{.Names}}' |
-    awk 'tolower($0) ~ /caddy/ {print $1}')"
-  [[ "$(wc -w <<< "$CADDY_CONTAINER")" == 1 ]] || die "Caddy ist nicht eindeutig."
-  CADDY_IP="$(docker inspect "$CADDY_CONTAINER" "$GATEWAY_CONTAINER" | python3 -c '
+  TRUSTED_PROXY_IP="$(docker inspect "$GATEWAY_CONTAINER" | python3 -c '
 import ipaddress, json, sys
-caddy, gateway=json.load(sys.stdin)
-caddy_networks=caddy["NetworkSettings"]["Networks"]
-gateway_networks=gateway["NetworkSettings"]["Networks"]
+gateway=json.load(sys.stdin)[0]
 values=[
-    caddy_networks[name].get("IPAddress")
-    for name in sorted(set(caddy_networks) & set(gateway_networks))
+    network.get("Gateway")
+    for network in gateway["NetworkSettings"]["Networks"].values()
 ]
 values=[
     value for value in values
@@ -144,15 +150,28 @@ values=[
 if len(set(values)) != 1:
     raise SystemExit(1)
 print(values[0])
-')"
-  PUBLIC_ORIGIN="$(docker inspect "$GATEWAY_CONTAINER" | python3 -c '
-import json, sys
-labels=json.load(sys.stdin)[0]["Config"].get("Labels") or {}
-site=labels.get("caddy", "").strip().split()
-if len(site) != 1 or site[0].startswith(":"):
+')" || die "Docker-Hostadresse für den Caddy-Proxy ist nicht eindeutig."
+  PUBLIC_ORIGIN="$(python3 - "$CADDY_CONFIG" <<'PY'
+import re, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    lines=handle.readlines()
+sites=[]
+depth=0
+for line in lines:
+    if depth == 0:
+        match=re.fullmatch(r"\s*([A-Za-z0-9.-]+)\s*\{\s*(?:#.*)?\n?", line)
+        if match:
+            sites.append(match.group(1))
+    depth += line.count("{") - line.count("}")
+    if depth < 0:
+        raise SystemExit(1)
+if depth != 0:
     raise SystemExit(1)
-print("https://" + site[0].rstrip("/"))
-')"
+if len(sites) != 1 or "." not in sites[0]:
+    raise SystemExit(1)
+print("https://" + sites[0])
+PY
+)" || die "Öffentliche HTTPS-Origin konnte nicht sicher erkannt werden."
   [[ "$PUBLIC_ORIGIN" =~ ^https://[A-Za-z0-9.-]+$ ]] \
     || die "Öffentliche HTTPS-Origin konnte nicht sicher erkannt werden."
   docker exec "$GATEWAY_CONTAINER" /usr/local/bin/msc-mail-readonly accounts \
@@ -162,6 +181,7 @@ print("https://" + site[0].rstrip("/"))
 backup_current() {
   install -d -o root -g root -m 0700 -- "$BACKUP_DIR"
   cp -a -- "$OPENCLAW_CONFIG" "${BACKUP_DIR}/openclaw.json"
+  cp -a -- "$CADDY_CONFIG" "${BACKUP_DIR}/Caddyfile"
   if [[ -d "$INSTALL_ROOT" ]]; then
     cp -a -- "$INSTALL_ROOT" "${BACKUP_DIR}/install-root"
   fi
@@ -203,7 +223,7 @@ write_configuration() {
           "${SECRET_ROOT}/msc-approved-mail-${key}-key"
     fi
   done
-  python3 - "$PUBLIC_ORIGIN" "$CADDY_IP" "$PRODUCTION_CONFIG" \
+  python3 - "$PUBLIC_ORIGIN" "$TRUSTED_PROXY_IP" "$PRODUCTION_CONFIG" \
     "$PROPOSAL_CONFIG" "$BOOTSTRAP_CONFIG" <<'PY'
 import json, sys, tomllib
 origin, proxy, production_path, proposal_path, bootstrap_path = sys.argv[1:]
@@ -317,6 +337,8 @@ services:
   ${GATEWAY_SERVICE}:
     environment:
       MSC_APPROVED_ACTIONS_CONFIG: ${CONTAINER_CONFIG}/production.json
+    ports:
+      - "127.0.0.1:${LISTENER_PORT}:${LISTENER_PORT}"
     volumes:
       - ${APP_ROOT}:${CONTAINER_APP}:ro
       - ${APP_ROOT}/bin/msc:/usr/local/bin/msc:ro
@@ -327,12 +349,16 @@ services:
       - ${SECRET_ROOT}/msc-approved-mail-encryption-key:/run/secrets/msc_approval_encryption_key:ro
       - ${SECRET_ROOT}/msc-approved-mail-signing-key:/run/secrets/msc_approval_signing_key:ro
       - ${SECRET_ROOT}/msc-approved-mail-session-key:/run/secrets/msc_approval_session_key:ro
-    labels:
-      caddy.route_0.0_request_header: "${PUBLIC_BASE_PATH}/* X-MSC-Approval-Actor vinzenz"
-      caddy.route_0.1_reverse_proxy: "${PUBLIC_BASE_PATH}/* {{upstreams ${LISTENER_PORT}}}"
 EOF
   chown root:root "$OVERRIDE_FILE"
   chmod 0600 "$OVERRIDE_FILE"
+}
+
+write_caddy_configuration() {
+  python3 "${SCRIPT_DIR}/render-caddy.py" \
+    "$CADDY_CONFIG" "$PUBLIC_BASE_PATH" "$LISTENER_PORT"
+  caddy validate --config "$CADDY_CONFIG" >/dev/null \
+    || die "Erweiterte Caddy-Konfiguration ist ungültig."
 }
 
 activate_and_verify() {
@@ -354,6 +380,8 @@ activate_and_verify() {
   done
   [[ -n "$container" ]] || die "Gateway wurde nicht gestartet."
   GATEWAY_CONTAINER="$container"
+  caddy reload --config "$CADDY_CONFIG" >/dev/null \
+    || die "Caddy-Konfiguration konnte nicht neu geladen werden."
   docker exec "$container" openclaw plugins inspect msc-approved-mail --runtime --json \
     >/dev/null || die "Produktionsplugin ist nicht aktiv."
   [[ "$(curl -sS -o /dev/null -w '%{http_code}' \
@@ -373,6 +401,7 @@ main() {
   write_configuration
   enable_plugin
   write_override
+  write_caddy_configuration
   activate_and_verify
   printf '\nMSC-Mail-Freigabedienst ist aktiv.\n'
   printf 'Passkey-Seite: %s%s/register\n' "$PUBLIC_ORIGIN" "$PUBLIC_BASE_PATH"

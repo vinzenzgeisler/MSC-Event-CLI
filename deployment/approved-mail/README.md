@@ -16,8 +16,12 @@ Secret-Dateien. Es fragt kein zusätzliches Passwort ab. Es baut ein
 unveränderlich gemountetes Produktionspaket mit dem bereits laufenden
 OpenClaw-Gateway-Image; Node.js und npm müssen nicht zusätzlich auf dem
 Docker-Host installiert sein. Es erzeugt getrennte Schlüssel,
-aktiviert das Plugin, richtet die Caddy-Pfadroute ein, erstellt nur den
-Gateway-Service neu und prüft Gateway, Plugin, HTTPS-Zugriff und Mail-Lesen.
+aktiviert das Plugin, veröffentlicht den Approval-Port ausschließlich auf
+`127.0.0.1`, ergänzt die vorhandene Host-Caddy-Konfiguration transaktional und
+lädt Caddy ohne Neustart neu. Es erstellt nur den Gateway-Service neu und prüft
+Gateway, Plugin, HTTPS-Zugriff und Mail-Lesen. Caddyfile, OpenClaw-Konfiguration
+und ein vorhandenes Installationsverzeichnis werden gemeinsam gesichert und bei
+einem Fehler automatisch zurückgerollt.
 Zusätzlich steht danach im Gateway der Befehl `msc` für Lesen und das Anlegen
 eines konkreten Antwortentwurfs bereit.
 
