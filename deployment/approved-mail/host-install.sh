@@ -75,8 +75,6 @@ rollback() {
   fi
   exit "$status"
 }
-trap rollback EXIT INT TERM
-
 require_preflight() {
   [[ "$(id -u)" == 0 ]] || die "Bitte als root ausführen."
   for command in docker python3 openssl install cp mv stat readlink curl \
@@ -361,25 +359,46 @@ write_caddy_configuration() {
     || die "Erweiterte Caddy-Konfiguration ist ungültig."
 }
 
-activate_and_verify() {
-  compose config --quiet
-  log "Gateway wird genau einmal mit dem freigegebenen Dienst neu erstellt."
-  compose up -d --no-deps --force-recreate "$GATEWAY_SERVICE"
-  local deadline=$((SECONDS + 180)) container health=""
+wait_for_gateway_health() {
+  local timeout_seconds="${1:-180}"
+  local deadline=$((SECONDS + timeout_seconds)) container health=""
   while ((SECONDS < deadline)); do
     container="$(compose ps -q "$GATEWAY_SERVICE" 2>/dev/null || true)"
     if [[ -n "$container" ]]; then
       health="$(docker inspect -f \
-        '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")"
-      [[ "$health" == healthy ]] && break
+        '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+        "$container" 2>/dev/null || true)"
+      if [[ "$health" == healthy ]]; then
+        GATEWAY_CONTAINER="$container"
+        return 0
+      fi
       if [[ "$health" == none ]] && docker exec "$container" openclaw health \
-        >/dev/null 2>&1; then break; fi
-      [[ "$health" == unhealthy ]] && die "Gateway ist unhealthy."
+        >/dev/null 2>&1; then
+        GATEWAY_CONTAINER="$container"
+        return 0
+      fi
     fi
     sleep 2
   done
-  [[ -n "$container" ]] || die "Gateway wurde nicht gestartet."
-  GATEWAY_CONTAINER="$container"
+  if [[ -n "$container" ]]; then
+    printf '[msc-approved-mail] Gateway-Diagnose nach Zeitüberschreitung:\n' >&2
+    docker inspect "$container" --format \
+      '{{range .State.Health.Log}}{{println .Start "exit=" .ExitCode .Output}}{{end}}' \
+      >&2 2>/dev/null || true
+    docker logs --tail 120 "$container" >&2 2>/dev/null || true
+  else
+    printf '[msc-approved-mail] Gateway wurde nicht gestartet.\n' >&2
+  fi
+  return 1
+}
+
+activate_and_verify() {
+  compose config --quiet
+  log "Gateway wird genau einmal mit dem freigegebenen Dienst neu erstellt."
+  compose up -d --no-deps --force-recreate "$GATEWAY_SERVICE"
+  wait_for_gateway_health 180 \
+    || die "Gateway wurde innerhalb von 180 Sekunden nicht healthy."
+  local container="$GATEWAY_CONTAINER"
   caddy reload --config "$CADDY_CONFIG" >/dev/null \
     || die "Caddy-Konfiguration konnte nicht neu geladen werden."
   docker exec "$container" openclaw plugins inspect msc-approved-mail --runtime --json \
@@ -413,4 +432,7 @@ main() {
   printf 'Backup: %s\n' "$BACKUP_DIR"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  trap rollback EXIT INT TERM
+  main "$@"
+fi
