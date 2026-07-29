@@ -6,6 +6,7 @@ import { ApprovedActionOutboxCoordinator } from './approval-execution.js';
 import { SqliteDurableOutbox } from './durable-outbox.js';
 import {
   createMailReplyOutboxAdapter,
+  createMailSendOutboxAdapter,
   MscMailFlow,
 } from './mail-flow.js';
 import { InactiveMscMailFlowRuntime } from './mail-flow-runtime.js';
@@ -174,7 +175,10 @@ export class MscMailProductionComposition {
         queue: this.review.queue,
         outboxCoordinator: new ApprovedActionOutboxCoordinator(
           this.review.queue,
-          [createMailReplyOutboxAdapter(options.mailPolicy)],
+          [
+            createMailReplyOutboxAdapter(options.mailPolicy),
+            createMailSendOutboxAdapter(options.mailPolicy),
+          ],
         ),
         dispatchWorker: worker,
         approvalUrl: (actionId) => this.review.http.approvalUrl(actionId),

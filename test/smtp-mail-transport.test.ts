@@ -51,6 +51,9 @@ test('pins TLS, account, envelope and safe plain-text message options', async ()
     port: 465,
     secure: true,
     requireTLS: false,
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
     auth: { user: config.username, pass: config.password },
     tls: {
       rejectUnauthorized: true,
