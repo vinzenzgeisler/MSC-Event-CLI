@@ -37,6 +37,16 @@ type ReplySendTool = {
   ): Promise<ToolResult>;
 };
 
+type MailWatchTool = {
+  name: 'msc_mail_watch_list';
+  description: string;
+  parameters: Record<string, unknown>;
+  execute(
+    id: string,
+    params: Record<string, unknown>,
+  ): Promise<ToolResult>;
+};
+
 const APPROVAL_BASE_PATH = '/msc-approval';
 const SEND_TOOL_NAME = 'msc_mail_reply_send';
 const AUTHORIZATION_NONCE_PARAM = 'operatorApprovalNonce';
@@ -53,7 +63,7 @@ export interface MscMailProductionPluginApi {
     ): Promise<boolean>;
   }): void;
   registerTool(
-    tool: ReplyProposalTool | ReplySendTool,
+    tool: ReplyProposalTool | ReplySendTool | MailWatchTool,
     options: { optional: true },
   ): void;
   on(
@@ -109,6 +119,25 @@ const sendInputSchema = z.object({
   operatorApprovalNonce: z.string().uuid().optional(),
 }).strict();
 
+const watchInputSchema = z.object({}).strict();
+const watchEnvelopeSchema = z.object({
+  source: z.object({
+    account: z.enum(['msc-nennung', 'msc-info', 'msc-vorstand']),
+    sender_identity: z.string().email(),
+  }).passthrough(),
+  data: z.array(z.object({
+    id: z.string().regex(/^[1-9][0-9]{0,17}$/),
+    from: z.object({
+      addr: z.string().email().nullable(),
+    }).passthrough(),
+  }).passthrough()),
+}).passthrough();
+const WATCH_ACCOUNTS = [
+  'msc-nennung',
+  'msc-info',
+  'msc-vorstand',
+] as const;
+
 const defaultConfigPath = (): string => join(
   homedir(),
   '.openclaw',
@@ -142,6 +171,45 @@ export const registerMscMailProductionPlugin = (
     toolCallId: string;
     expiresAtMs: number;
   }>();
+
+  api.registerTool({
+    name: 'msc_mail_watch_list',
+    description:
+      'List only opaque message references and own-sender flags for the three MSC INBOX folders. This tool is read-only and never returns subjects or message bodies.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+    async execute(_id, params) {
+      if (!composition) {
+        throw new Error('MSC approved mail service is not running');
+      }
+      watchInputSchema.parse(params);
+      const accounts = await Promise.all(WATCH_ACCOUNTS.map(async (account) => {
+        const envelope = watchEnvelopeSchema.parse(
+          await composition!.provider.list(account, 'INBOX'),
+        );
+        const own = envelope.source.sender_identity.toLowerCase();
+        return {
+          account,
+          entries: envelope.data.slice(0, 200).map((message) => ({
+            messageId: message.id,
+            incoming: message.from.addr?.toLowerCase() !== own,
+          })),
+        };
+      }));
+      const details = {
+        readOnly: true,
+        folder: 'INBOX',
+        accounts,
+      };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(details) }],
+        details,
+      };
+    },
+  }, { optional: true });
 
   api.registerTool({
     name: 'msc_mail_reply_propose',
