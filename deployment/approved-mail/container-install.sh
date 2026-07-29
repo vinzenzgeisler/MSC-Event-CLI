@@ -232,6 +232,7 @@ activate_files_and_config() {
     mv -- "$APP_ROOT" "$APP_BACKUP"
   fi
   mv -- "${STAGING_ROOT}/app" "$APP_ROOT"
+  rmdir -- "$STAGING_ROOT"
   STAGING_ROOT=""
   ROLLBACK_ARMED=1
 
@@ -254,6 +255,15 @@ entries['msc-approved-mail'] = {
 };
 if (Array.isArray(plugins.allow) && !plugins.allow.includes('msc-approved-mail')) {
   plugins.allow.push('msc-approved-mail');
+}
+const tools = config.tools ??= {};
+if (Array.isArray(tools.allow)) {
+  if (!tools.allow.includes('msc_mail_reply_propose')) {
+    tools.allow.push('msc_mail_reply_propose');
+  }
+} else {
+  const alsoAllow = Array.isArray(tools.alsoAllow) ? tools.alsoAllow : [];
+  tools.alsoAllow = [...new Set([...alsoAllow, 'msc_mail_reply_propose'])];
 }
 const temporary = `${path}.msc-approved-mail.${process.pid}.tmp`;
 fs.writeFileSync(temporary, `${JSON.stringify(config, null, 2)}\n`, {
