@@ -37,8 +37,6 @@ type ReplySendTool = {
   ): Promise<ToolResult>;
 };
 
-type ReplySendToolFactory = (context: PluginToolContext) => ReplySendTool | null;
-
 const APPROVAL_BASE_PATH = '/msc-approval';
 const SEND_TOOL_NAME = 'msc_mail_reply_send';
 const AUTHORIZATION_NONCE_PARAM = 'operatorApprovalNonce';
@@ -55,8 +53,8 @@ export interface MscMailProductionPluginApi {
     ): Promise<boolean>;
   }): void;
   registerTool(
-    tool: ReplyProposalTool | ReplySendToolFactory,
-    options: { optional: true; name?: string },
+    tool: ReplyProposalTool | ReplySendTool,
+    options: { optional: true },
   ): void;
   on(
     hook: 'before_tool_call',
@@ -204,67 +202,63 @@ export const registerMscMailProductionPlugin = (
     },
   }, { optional: true });
 
-  api.registerTool((context) => {
-    const invocationSessionKey = context.sessionKey ?? '';
-    return {
-      name: SEND_TOOL_NAME,
-      description:
-        'Send one existing encrypted MSC mail proposal. OpenClaw blocks this tool until Vinzenz explicitly approves this exact call in the authorized Telegram direct chat.',
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['actionId', 'payloadReference'],
-        properties: {
-          actionId: { type: 'string', format: 'uuid' },
-          payloadReference: {
-            type: 'string',
-            pattern: '^[a-f0-9]{12}$',
-          },
-          operatorApprovalNonce: {
-            type: 'string',
-            format: 'uuid',
-            description: 'Injected by the OpenClaw approval hook.',
-          },
+  api.registerTool({
+    name: SEND_TOOL_NAME,
+    description:
+      'Send one existing encrypted MSC mail proposal. OpenClaw blocks this tool until Vinzenz explicitly approves this exact call in the authorized Telegram direct chat.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['actionId', 'payloadReference'],
+      properties: {
+        actionId: { type: 'string', format: 'uuid' },
+        payloadReference: {
+          type: 'string',
+          pattern: '^[a-f0-9]{12}$',
+        },
+        operatorApprovalNonce: {
+          type: 'string',
+          format: 'uuid',
+          description: 'Injected by the OpenClaw approval hook.',
         },
       },
-      async execute(id, params) {
-        if (!composition) {
-          throw new Error('MSC approved mail service is not running');
-        }
-        const input = sendInputSchema.parse(params);
-        if (!input.operatorApprovalNonce) {
-          throw new Error('operator approval is missing');
-        }
-        const authorization = approvedCalls.get(input.operatorApprovalNonce);
-        approvedCalls.delete(input.operatorApprovalNonce);
-        if (!authorization ||
-            authorization.expiresAtMs <= Date.now() ||
-            authorization.actionId !== input.actionId ||
-            authorization.payloadReference !== input.payloadReference ||
-            authorization.sessionKey !== invocationSessionKey ||
-            authorization.toolCallId !== id) {
-          throw new Error('operator approval is missing or does not match this tool call');
-        }
-        const result = await composition.approveAndDispatchFromGateway({
-          actionId: input.actionId,
-          payloadReference: input.payloadReference,
-          sessionKey: invocationSessionKey,
-          toolCallId: id,
-        });
-        const details = {
-          sendsMail: true,
-          approvalMethod: 'openclaw-plugin-approval',
-          actionId: result.actionId,
-          status: result.status,
-          messageId: result.messageId,
-        };
-        return {
-          content: [{ type: 'text', text: JSON.stringify(details) }],
-          details,
-        };
-      },
-    };
-  }, { optional: true, name: SEND_TOOL_NAME });
+    },
+    async execute(id, params) {
+      if (!composition) {
+        throw new Error('MSC approved mail service is not running');
+      }
+      const input = sendInputSchema.parse(params);
+      if (!input.operatorApprovalNonce) {
+        throw new Error('operator approval is missing');
+      }
+      const authorization = approvedCalls.get(input.operatorApprovalNonce);
+      approvedCalls.delete(input.operatorApprovalNonce);
+      if (!authorization ||
+          authorization.expiresAtMs <= Date.now() ||
+          authorization.actionId !== input.actionId ||
+          authorization.payloadReference !== input.payloadReference ||
+          authorization.toolCallId !== id) {
+        throw new Error('operator approval is missing or does not match this tool call');
+      }
+      const result = await composition.approveAndDispatchFromGateway({
+        actionId: input.actionId,
+        payloadReference: input.payloadReference,
+        sessionKey: authorization.sessionKey,
+        toolCallId: id,
+      });
+      const details = {
+        sendsMail: true,
+        approvalMethod: 'openclaw-plugin-approval',
+        actionId: result.actionId,
+        status: result.status,
+        messageId: result.messageId,
+      };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(details) }],
+        details,
+      };
+    },
+  }, { optional: true });
 
   api.on('before_tool_call', async (event, context) => {
     if (event.toolName !== SEND_TOOL_NAME) return undefined;
