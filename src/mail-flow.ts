@@ -7,6 +7,7 @@ import {
   type ApprovalRecord,
 } from './approval.js';
 import {
+  MailSendDryRunAdapter,
   createMailReplyIntent,
   MailReplyDryRunAdapter,
   MailReplyPreviewRenderer,
@@ -143,4 +144,13 @@ export const createMailReplyOutboxAdapter = (
   senderIdentity: policy.accounts[source.account].senderIdentity,
   allowedFolders: policy.accounts[source.account].allowedFolders,
   source,
+}));
+
+export const createMailSendOutboxAdapter = (
+  policy: MscMailAccountPolicy,
+): MailSendDryRunAdapter => new MailSendDryRunAdapter(async (account) => ({
+  policyVersion: policy.version,
+  account,
+  senderIdentity: policy.accounts[account].senderIdentity,
+  allowedFolders: policy.accounts[account].allowedFolders,
 }));

@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import type { Server } from 'node:http';
-import type { MscMailAccountPolicy } from '../src/mail-approved-action.js';
+import {
+  createMailSendIntent,
+  type MscMailAccountPolicy,
+} from '../src/mail-approved-action.js';
 import { MscMailProductionComposition } from '../src/msc-mail-production-composition.js';
 
 const policy: MscMailAccountPolicy = {
@@ -255,4 +258,47 @@ test('binds one Telegram operator approval to one exact mail proposal and SMTP a
     /consumed, not pending/,
   );
   assert.equal(smtpCalls, 1);
+
+  const sendRecord = await composition.review.queue.propose(
+    createMailSendIntent(policy, {
+      account: 'msc-info',
+      to: 'nennung@msc.example',
+      subject: '[TEST] Eingangswächter',
+      bodyText: 'Technische Testmail.',
+      triageStatus: 'READY_TO_DRAFT',
+      sources: ['Telegram-Testauftrag'],
+      uncertainties: [],
+      deliveryMode: 'approved-send',
+    }),
+    'telegram-send-approval-test',
+  );
+  const sendPayloadReference = sendRecord.payloadHash.slice(0, 12);
+  assert.equal(
+    (await composition.gatewayApprovalPreview(
+      sendRecord.actionId,
+      sendPayloadReference,
+      sessionKey,
+    )).title,
+    'MSC-E-Mail senden',
+  );
+  assert.equal(
+    (await composition.approveAndDispatchFromGateway({
+      actionId: sendRecord.actionId,
+      payloadReference: sendPayloadReference,
+      sessionKey,
+      toolCallId: 'tool-call-send-1',
+    })).status,
+    'accepted',
+  );
+  assert.equal(smtpCalls, 2);
+  await assert.rejects(
+    composition.approveAndDispatchFromGateway({
+      actionId: sendRecord.actionId,
+      payloadReference: sendPayloadReference,
+      sessionKey,
+      toolCallId: 'tool-call-send-2',
+    }),
+    /consumed, not pending/,
+  );
+  assert.equal(smtpCalls, 2);
 });

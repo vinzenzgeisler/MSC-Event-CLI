@@ -106,6 +106,9 @@ export class SmtpMailTransport implements MailTransport {
           port: config.port,
           secure: config.secure,
           requireTLS: config.port === 587,
+          connectionTimeout: 10_000,
+          greetingTimeout: 10_000,
+          socketTimeout: 20_000,
           auth: {
             user: config.username,
             pass: config.password,
