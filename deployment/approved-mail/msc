@@ -1,3 +1,0 @@
-#!/bin/sh
-set -eu
-exec node /opt/msc-approved-mail/dist/src/msc-ops-cli.js "$@"

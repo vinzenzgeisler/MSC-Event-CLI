@@ -59,6 +59,33 @@ test('rejects spoofed identity, origin, arrays and untrusted peers', () => {
   })), undefined);
 });
 
+test('uses the configured actor for the native gateway route without trusting a client actor header', () => {
+  const resolver = new TrustedProxyApprovalSessionResolver({
+    publicOrigin: 'https://openclaw.example',
+    actor: 'vinzenz',
+    csrfKey: Buffer.alloc(32, 92),
+    trustedProxyAddresses: ['172.20.0.1'],
+    trustConfiguredActorWithoutHeader: true,
+  });
+  const forwarded = {
+    'x-forwarded-proto': 'https',
+    'x-forwarded-host': 'openclaw.example',
+  };
+  assert.equal(
+    resolver.resolve(request('172.20.0.1', forwarded))?.actor,
+    'vinzenz',
+  );
+  assert.equal(resolver.resolve(request('203.0.113.7', forwarded)), undefined);
+  assert.equal(resolver.resolve(request('172.20.0.1', {
+    ...forwarded,
+    'x-msc-approval-actor': 'attacker',
+  })), undefined);
+  assert.equal(resolver.resolve(request('172.20.0.1', {
+    ...forwarded,
+    'x-forwarded-host': 'attacker.example',
+  })), undefined);
+});
+
 test('fails closed on unsafe configuration', () => {
   assert.throws(() => new TrustedProxyApprovalSessionResolver({
     publicOrigin: 'http://openclaw.example',

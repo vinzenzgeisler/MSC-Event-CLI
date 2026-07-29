@@ -16,6 +16,7 @@ import {
 } from './mail-approved-action.js';
 import type { MailOutboxDispatchWorker, MailDispatchResult } from './mail-outbox-transport.js';
 import type { MscMailReadonlyProvider, MscMailProviderEnvelope } from './mail-readonly-provider.js';
+import { z } from 'zod';
 
 export interface ProposedMailReply {
   actionId: string;
@@ -24,6 +25,25 @@ export interface ProposedMailReply {
   expiresAt: string;
   preview: ActionPreview;
 }
+
+export interface MailReplyFromSourceInput {
+  account: MailReplyDraft['source']['account'];
+  folder: string;
+  messageId: string;
+  bodyText: string;
+  sources: string[];
+  uncertainties?: string[];
+}
+
+const mailSourceSchema = z.object({
+  id: z.union([z.string(), z.number()]).transform(String),
+  from: z.union([
+    z.string().email(),
+    z.object({ addr: z.string().email() }).passthrough()
+      .transform((value) => value.addr),
+  ]),
+  subject: z.string().trim().min(1).max(200),
+}).passthrough();
 
 export interface MscMailFlowOptions {
   provider: MscMailReadonlyProvider;
@@ -68,6 +88,35 @@ export class MscMailFlow {
       ttlSeconds,
     );
     return this.proposal(record);
+  }
+
+  async proposeReplyFromSource(
+    input: MailReplyFromSourceInput,
+    idempotencyKey: string,
+    ttlSeconds = 900,
+  ): Promise<ProposedMailReply> {
+    const envelope = await this.read(
+      input.account,
+      input.folder,
+      input.messageId,
+    );
+    const source = mailSourceSchema.parse(envelope.data);
+    if (source.id !== input.messageId) {
+      throw new Error('mail provider returned a mismatched source message');
+    }
+    return this.proposeReply({
+      source: {
+        account: input.account,
+        folder: input.folder,
+        messageId: input.messageId,
+        from: source.from,
+        subject: source.subject,
+      },
+      bodyText: input.bodyText,
+      triageStatus: 'READY_TO_DRAFT',
+      sources: input.sources,
+      uncertainties: input.uncertainties ?? [],
+    }, idempotencyKey, ttlSeconds);
   }
 
   async dispatchApproved(actionId: string): Promise<MailDispatchResult> {
