@@ -51,7 +51,7 @@ export interface FreshAuthContext {
 export interface VerifiedFreshAuth {
   actor: string;
   authenticatedAt: string;
-  method: 'webauthn' | 'passkey' | 'oidc-max-age';
+  method: 'webauthn' | 'passkey' | 'oidc-max-age' | 'gateway-operator';
   assertionId: string;
 }
 

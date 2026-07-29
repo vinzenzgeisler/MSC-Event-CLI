@@ -1,4 +1,5 @@
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { lstat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -21,7 +22,26 @@ type ReplyProposalTool = {
   ): Promise<ToolResult>;
 };
 
+type PluginToolContext = {
+  sessionKey?: string;
+  toolCallId?: string;
+};
+
+type ReplySendTool = {
+  name: 'msc_mail_reply_send';
+  description: string;
+  parameters: Record<string, unknown>;
+  execute(
+    id: string,
+    params: Record<string, unknown>,
+  ): Promise<ToolResult>;
+};
+
+type ReplySendToolFactory = (context: PluginToolContext) => ReplySendTool | null;
+
 const APPROVAL_BASE_PATH = '/msc-approval';
+const SEND_TOOL_NAME = 'msc_mail_reply_send';
+const AUTHORIZATION_NONCE_PARAM = 'operatorApprovalNonce';
 
 export interface MscMailProductionPluginApi {
   registrationMode?: string;
@@ -34,7 +54,33 @@ export interface MscMailProductionPluginApi {
       response: ServerResponse,
     ): Promise<boolean>;
   }): void;
-  registerTool(tool: ReplyProposalTool, options: { optional: true }): void;
+  registerTool(
+    tool: ReplyProposalTool | ReplySendToolFactory,
+    options: { optional: true; name?: string },
+  ): void;
+  on(
+    hook: 'before_tool_call',
+    handler: (
+      event: {
+        toolName: string;
+        params: Record<string, unknown>;
+        toolCallId?: string;
+      },
+      context: PluginToolContext,
+    ) => Promise<{
+      block?: boolean;
+      blockReason?: string;
+      params?: Record<string, unknown>;
+      requireApproval?: {
+        title: string;
+        description: string;
+        severity: 'critical';
+        allowedDecisions: ['allow-once', 'deny'];
+        timeoutMs: number;
+        onResolution(decision: string): void;
+      };
+    } | undefined>,
+  ): void;
   registerService(service: {
     id: string;
     start(context: {
@@ -57,6 +103,12 @@ const proposalInputSchema = z.object({
     .default([]),
   idempotencyKey: z.string().trim().min(8).max(200),
   ttlSeconds: z.number().int().min(60).max(3_600).default(900),
+}).strict();
+
+const sendInputSchema = z.object({
+  actionId: z.string().uuid(),
+  payloadReference: z.string().regex(/^[a-f0-9]{12}$/),
+  operatorApprovalNonce: z.string().uuid().optional(),
 }).strict();
 
 const defaultConfigPath = (): string => join(
@@ -85,11 +137,18 @@ export const registerMscMailProductionPlugin = (
   api: MscMailProductionPluginApi,
 ): void => {
   let composition: MscMailProductionComposition | undefined;
+  const approvedCalls = new Map<string, {
+    actionId: string;
+    payloadReference: string;
+    sessionKey: string;
+    toolCallId: string;
+    expiresAtMs: number;
+  }>();
 
   api.registerTool({
     name: 'msc_mail_reply_propose',
     description:
-      'Create an encrypted MSC mail reply proposal from one exact read-only source message. This tool never sends mail; each proposal requires a separate Passkey approval.',
+      'Create an encrypted MSC mail reply proposal from one exact read-only source message. This tool never sends mail; each proposal requires a separate operator approval.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -135,7 +194,7 @@ export const registerMscMailProductionPlugin = (
       );
       const details = {
         sendsMail: false,
-        requiresPasskeyApproval: true,
+        requiresSeparateOperatorApproval: true,
         ...result,
       };
       return {
@@ -144,6 +203,143 @@ export const registerMscMailProductionPlugin = (
       };
     },
   }, { optional: true });
+
+  api.registerTool((context) => {
+    const invocationSessionKey = context.sessionKey ?? '';
+    return {
+      name: SEND_TOOL_NAME,
+      description:
+        'Send one existing encrypted MSC mail proposal. OpenClaw blocks this tool until Vinzenz explicitly approves this exact call in the authorized Telegram direct chat.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['actionId', 'payloadReference'],
+        properties: {
+          actionId: { type: 'string', format: 'uuid' },
+          payloadReference: {
+            type: 'string',
+            pattern: '^[a-f0-9]{12}$',
+          },
+          operatorApprovalNonce: {
+            type: 'string',
+            format: 'uuid',
+            description: 'Injected by the OpenClaw approval hook.',
+          },
+        },
+      },
+      async execute(id, params) {
+        if (!composition) {
+          throw new Error('MSC approved mail service is not running');
+        }
+        const input = sendInputSchema.parse(params);
+        if (!input.operatorApprovalNonce) {
+          throw new Error('operator approval is missing');
+        }
+        const authorization = approvedCalls.get(input.operatorApprovalNonce);
+        approvedCalls.delete(input.operatorApprovalNonce);
+        if (!authorization ||
+            authorization.expiresAtMs <= Date.now() ||
+            authorization.actionId !== input.actionId ||
+            authorization.payloadReference !== input.payloadReference ||
+            authorization.sessionKey !== invocationSessionKey ||
+            authorization.toolCallId !== id) {
+          throw new Error('operator approval is missing or does not match this tool call');
+        }
+        const result = await composition.approveAndDispatchFromGateway({
+          actionId: input.actionId,
+          payloadReference: input.payloadReference,
+          sessionKey: invocationSessionKey,
+          toolCallId: id,
+        });
+        const details = {
+          sendsMail: true,
+          approvalMethod: 'openclaw-plugin-approval',
+          actionId: result.actionId,
+          status: result.status,
+          messageId: result.messageId,
+        };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(details) }],
+          details,
+        };
+      },
+    };
+  }, { optional: true, name: SEND_TOOL_NAME });
+
+  api.on('before_tool_call', async (event, context) => {
+    if (event.toolName !== SEND_TOOL_NAME) return undefined;
+    if (!composition) {
+      return {
+        block: true,
+        blockReason: 'MSC approved mail service is not running',
+      };
+    }
+    const parsed = sendInputSchema.omit({
+      operatorApprovalNonce: true,
+    }).safeParse(event.params);
+    const sessionKey = context.sessionKey ?? '';
+    const toolCallId = event.toolCallId ?? context.toolCallId ?? '';
+    if (!parsed.success || !toolCallId) {
+      return {
+        block: true,
+        blockReason: 'mail send request is incomplete or invalid',
+      };
+    }
+    let preview;
+    try {
+      preview = await composition.gatewayApprovalPreview(
+        parsed.data.actionId,
+        parsed.data.payloadReference,
+        sessionKey,
+      );
+    } catch (error) {
+      return {
+        block: true,
+        blockReason: error instanceof Error
+          ? error.message
+          : 'mail proposal cannot be approved',
+      };
+    }
+    const nonce = randomUUID();
+    const subject = preview.changes.find(
+      (change) => change.field === 'Betreff',
+    )?.after;
+    const body = preview.changes.find(
+      (change) => change.field === 'Antwort' ||
+        change.field === 'Nachricht',
+    )?.after;
+    const description = [
+      preview.summary,
+      `Ziel: ${preview.target}`,
+      ...(typeof subject === 'string' ? [`Betreff: ${subject}`] : []),
+      ...(typeof body === 'string' ? [`Text: ${body}`] : []),
+      `Referenz: ${parsed.data.payloadReference}`,
+      'Der Versand erfolgt genau einmal über den konfigurierten MSC-SMTP-Account.',
+    ].join('\n').slice(0, 512);
+    return {
+      params: {
+        ...event.params,
+        [AUTHORIZATION_NONCE_PARAM]: nonce,
+      },
+      requireApproval: {
+        title: preview.title.slice(0, 80),
+        description,
+        severity: 'critical',
+        allowedDecisions: ['allow-once', 'deny'],
+        timeoutMs: 600_000,
+        onResolution(decision) {
+          if (decision !== 'allow-once') return;
+          approvedCalls.set(nonce, {
+            actionId: parsed.data.actionId,
+            payloadReference: parsed.data.payloadReference,
+            sessionKey,
+            toolCallId,
+            expiresAtMs: Date.now() + 60_000,
+          });
+        },
+      },
+    };
+  });
 
   if (api.registrationMode && api.registrationMode !== 'full') return;
   const configPath = process.env.MSC_APPROVED_ACTIONS_CONFIG?.trim() ||

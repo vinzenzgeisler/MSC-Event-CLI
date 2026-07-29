@@ -40,6 +40,9 @@ class ContainerInstallTests(unittest.TestCase):
         self.assertIn("plugin/production-package", source)
         self.assertIn("openclaw plugins doctor", source)
         self.assertIn("msc_mail_reply_propose", source)
+        self.assertIn("msc_mail_reply_send", source)
+        self.assertIn("MSC_APPROVED_MAIL_OPERATOR_SESSION_KEY", source)
+        self.assertIn("agent:main:telegram:direct:8261978945", source)
         self.assertIn('rmdir -- "$STAGING_ROOT"', source)
 
     def test_private_file_check_rejects_world_readable_mode(self) -> None:

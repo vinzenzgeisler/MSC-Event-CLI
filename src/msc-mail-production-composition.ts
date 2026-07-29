@@ -1,5 +1,7 @@
 import type { Server } from 'node:http';
 import { createHmac } from 'node:crypto';
+import type { ActionPreview } from './action.js';
+import type { MailDispatchResult } from './mail-outbox-transport.js';
 import { ApprovedActionOutboxCoordinator } from './approval-execution.js';
 import { SqliteDurableOutbox } from './durable-outbox.js';
 import {
@@ -7,7 +9,13 @@ import {
   MscMailFlow,
 } from './mail-flow.js';
 import { InactiveMscMailFlowRuntime } from './mail-flow-runtime.js';
-import type { MscMailAccountPolicy } from './mail-approved-action.js';
+import {
+  MailReplyPreviewRenderer,
+  MailSendPreviewRenderer,
+  parseMailReplyIntent,
+  parseMailSendIntent,
+  type MscMailAccountPolicy,
+} from './mail-approved-action.js';
 import { MscMailReadonlyProvider } from './mail-readonly-provider.js';
 import { MailOutboxDispatchWorker } from './mail-outbox-transport.js';
 import { MscApprovalReviewComposition } from './msc-approval-review-composition.js';
@@ -42,6 +50,7 @@ export interface MscMailProductionCompositionOptions {
   basePath: string;
   rpId: string;
   reviewerActor: string;
+  operatorSessionKey?: string;
   trustedProxyAddresses: string[];
   trustConfiguredActorWithoutHeader?: boolean;
   bindAddress: string;
@@ -84,8 +93,12 @@ export class MscMailProductionComposition {
   readonly adapter: PrivateApprovalHttpAdapter;
   readonly host: MscOperationsHostRuntime;
   private closed = false;
+  private readonly reviewerActor: string;
+  private readonly operatorSessionKey: string | undefined;
 
   constructor(options: MscMailProductionCompositionOptions) {
+    this.reviewerActor = options.reviewerActor;
+    this.operatorSessionKey = options.operatorSessionKey;
     this.review = new MscApprovalReviewComposition({
       stateDatabasePath: options.stateDatabasePath,
       encryptionKey: options.encryptionKey,
@@ -209,6 +222,74 @@ export class MscMailProductionComposition {
   start(): Promise<void> {
     if (this.closed) return Promise.reject(new Error('production composition is closed'));
     return this.host.start();
+  }
+
+  async gatewayApprovalPreview(
+    actionId: string,
+    payloadReference: string,
+    sessionKey: string,
+  ): Promise<ActionPreview> {
+    this.assertGatewayOperatorSession(sessionKey);
+    const record = await this.review.queue.review(actionId);
+    if (record.intent.kind !== 'mail.reply' && record.intent.kind !== 'mail.send') {
+      throw new Error('gateway approval supports only mail actions');
+    }
+    if (record.payloadHash.slice(0, 12) !== payloadReference) {
+      throw new Error('payload reference does not match the pending action');
+    }
+    return record.intent.kind === 'mail.reply'
+      ? new MailReplyPreviewRenderer().render(parseMailReplyIntent(record.intent))
+      : new MailSendPreviewRenderer().render(parseMailSendIntent(record.intent));
+  }
+
+  async approveAndDispatchFromGateway(options: {
+    actionId: string;
+    payloadReference: string;
+    sessionKey: string;
+    toolCallId: string;
+  }): Promise<MailDispatchResult> {
+    this.assertGatewayOperatorSession(options.sessionKey);
+    const record = await this.review.queue.review(options.actionId);
+    if (record.intent.kind !== 'mail.reply' && record.intent.kind !== 'mail.send') {
+      throw new Error('gateway approval supports only mail actions');
+    }
+    if (record.payloadHash.slice(0, 12) !== options.payloadReference) {
+      throw new Error('payload reference does not match the pending action');
+    }
+    const decidedAt = new Date().toISOString();
+    await this.review.approvals.decide({
+      actionId: options.actionId,
+      decision: 'approve',
+      decidedAt,
+      decidedBy: this.reviewerActor,
+      expiresAfter: decidedAt,
+      authenticationMethod: 'gateway-operator',
+      assertionId: `openclaw-plugin:${options.toolCallId}`,
+    });
+    try {
+      return await this.flow.dispatchApproved(options.actionId);
+    } catch (error) {
+      try {
+        const outbox = this.outbox.get(options.actionId);
+        if (outbox.status === 'accepted' || outbox.status === 'uncertain') {
+          return {
+            actionId: options.actionId,
+            attemptId: outbox.attemptId ?? 'unknown',
+            messageId: 'redacted',
+            status: outbox.status,
+          };
+        }
+      } catch {
+        // Preserve the original dispatch error when no durable hand-off exists.
+      }
+      throw error;
+    }
+  }
+
+  private assertGatewayOperatorSession(sessionKey: string): void {
+    if (!this.operatorSessionKey || sessionKey !== this.operatorSessionKey) {
+      throw new Error('gateway operator approval is not enabled for this session');
+    }
   }
 
   async stop(): Promise<void> {
