@@ -1,6 +1,7 @@
 import subprocess
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 
@@ -44,6 +45,21 @@ class ContainerInstallTests(unittest.TestCase):
         self.assertIn("MSC_APPROVED_MAIL_OPERATOR_SESSION_KEY", source)
         self.assertIn("agent:main:telegram:direct:8261978945", source)
         self.assertIn('rmdir -- "$STAGING_ROOT"', source)
+
+    def test_native_plugin_manifest_declares_both_optional_tools(self) -> None:
+        manifest = json.loads(
+            Path(
+                __file__,
+            ).parents[2].joinpath(
+                "plugin/production-package/openclaw.plugin.json",
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            manifest["contracts"]["tools"],
+            ["msc_mail_reply_propose", "msc_mail_reply_send"],
+        )
+        self.assertTrue(manifest["toolMetadata"]["msc_mail_reply_propose"]["optional"])
+        self.assertTrue(manifest["toolMetadata"]["msc_mail_reply_send"]["optional"])
 
     def test_private_file_check_rejects_world_readable_mode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
