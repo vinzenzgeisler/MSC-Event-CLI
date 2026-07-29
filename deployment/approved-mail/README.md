@@ -2,8 +2,9 @@
 
 Dieses Paket aktiviert den bereits getesteten Mail-Flow vollständig innerhalb
 des laufenden OpenClaw-Containers. Lesen bleibt read-only, ein Entwurf wird
-verschlüsselt gespeichert, Vinzenz prüft ihn über HTTPS und Passkey, und erst
-danach darf der SMTP-Worker genau einen Versandversuch ausführen.
+verschlüsselt gespeichert, und erst eine separate OpenClaw-Freigabe von
+Vinzenz im fest konfigurierten Telegram-Direktchat erlaubt genau einen
+SMTP-Versandversuch.
 
 Nach Merge einmal im Gateway-Container ausführen:
 
@@ -18,12 +19,13 @@ unter `/home/node/.openclaw/msc-approved-mail` ab. Es prüft den bestehenden
 Read-only-Mailzugriff, baut das Plugin, validiert die OpenClaw-Konfiguration und
 behält rückrollbare Sicherungen.
 
-Die Approval-Seite wird direkt als native Gateway-Route unter
-`/msc-approval` registriert. Es gibt keinen eigenen Port, keinen
-Docker-Socket, kein Compose-Override und keine Caddy-Sonderroute. Das optionale
-Plugin-Tool `msc_mail_reply_propose` liest die konkrete Ursprungsmail erneut
-über den unveränderten Read-only-Provider und speichert nur einen
-verschlüsselten Entwurf.
+Die bestehende Approval-Seite bleibt als native Gateway-Route unter
+`/msc-approval` kompatibel, wird für den Telegram-Pfad aber nicht benötigt. Es
+gibt keinen eigenen Port, keinen Docker-Socket, kein Compose-Override und keine
+Caddy-Sonderroute. Das optionale Plugin-Tool `msc_mail_reply_propose` liest die
+konkrete Ursprungsmail erneut über den unveränderten Read-only-Provider und
+speichert nur einen verschlüsselten Entwurf. `msc_mail_reply_send` ist an den
+exakten Session-Key `agent:main:telegram:direct:8261978945` gebunden.
 
 Das Installationsskript startet den Gateway bewusst nicht neu. Nach
 erfolgreicher Vorbereitung ist genau ein sicherer, auf aktive Arbeit wartender
@@ -33,15 +35,14 @@ Gateway-Neustart erforderlich:
 openclaw gateway restart --safe
 ```
 
-Anschließend zeigt das Skript den lokalen Befehl für einen zehn Minuten gültigen
-Bootstrap-Code. Den Code auf der ausgegebenen `/msc-approval/register`-Seite
-eingeben und den Passkey einmalig anlegen.
+Ein Bootstrap-Code oder Passkey ist für diesen Pfad nicht erforderlich. Jede
+Mail braucht weiterhin einen konkreten verschlüsselten Entwurf, eine
+vollständige Vorschau mit Payload-Referenz und eine eigene OpenClaw-Plugin-
+Freigabe. OpenClaw bietet dabei ausschließlich `allow-once` oder `deny` an,
+autorisiert den Telegram-Absender über `commands.ownerAllowFrom` und bindet
+die Freigabe an Tool-Aufruf, Direktchat, Aktions-ID und Payload-Referenz.
 
-Keine Mail wird durch Installation oder Passkey-Einrichtung versendet. Jede
-Mail braucht einen konkreten Entwurf und eine eigene Passkey-Freigabe. Der
-Worker unternimmt pro freigegebener Outbox-Nachricht genau einen SMTP-Versuch.
-
-Der Approval-Link enthält eine nicht erratbare Aktions-ID und wird nur über den
-privaten Telegram-Chat zugestellt. Wer den Link bewusst weitergibt, gibt damit
-auch die sichtbare Entwurfsvorschau weiter; ein Versand bleibt trotzdem ohne
-Vinzenz' registrierten Passkey beziehungsweise Face ID unmöglich.
+Installation und Entwurfserstellung versenden keine Mail. Nach einer
+`allow-once`-Entscheidung unternimmt der Worker pro Outbox-Nachricht genau
+einen SMTP-Versuch. Unklare Providerergebnisse bleiben wie bisher
+`uncertain` und werden nicht automatisch wiederholt.

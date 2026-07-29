@@ -44,6 +44,10 @@ const configSchema = z.object({
   basePath: z.string().regex(/^\/[a-z0-9][a-z0-9._~-]*$/),
   rpId: z.string().trim().min(1).max(253),
   reviewerActor: z.string().trim().min(1).max(128),
+  operatorSessionKey: z.string().trim().regex(
+    /^agent:[a-zA-Z0-9_-]+:telegram:direct:[0-9]+$/,
+    'operator session must be one exact Telegram direct-chat session key',
+  ).max(500).optional(),
   trustedProxyAddresses: z.array(z.string().refine(
     (value) => isIP(value) > 0,
     'trusted proxy must be an exact IP',
@@ -149,6 +153,9 @@ export const loadMscMailProductionOptions = async (
     basePath: config.basePath,
     rpId: config.rpId,
     reviewerActor: config.reviewerActor,
+    ...(config.operatorSessionKey === undefined
+      ? {}
+      : { operatorSessionKey: config.operatorSessionKey }),
     trustedProxyAddresses: config.trustedProxyAddresses,
     trustConfiguredActorWithoutHeader:
       config.trustConfiguredActorWithoutHeader,

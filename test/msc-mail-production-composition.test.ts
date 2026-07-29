@@ -130,3 +130,129 @@ test('fails closed before listener activation on mismatched SMTP policy', async 
     }],
   }), /must match/);
 });
+
+test('binds one Telegram operator approval to one exact mail proposal and SMTP attempt', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'msc-mail-telegram-'));
+  const sessionKey = 'agent:main:telegram:direct:8261978945';
+  let smtpCalls = 0;
+  const composition = new MscMailProductionComposition({
+    stateDatabasePath: join(directory, 'state.sqlite'),
+    encryptionKey: Buffer.alloc(32, 121),
+    signingKey: Buffer.alloc(32, 122),
+    sessionCsrfKey: Buffer.alloc(32, 123),
+    publicOrigin: 'https://openclaw.example',
+    basePath: '/msc-approval',
+    rpId: 'openclaw.example',
+    reviewerActor: 'vinzenz',
+    operatorSessionKey: sessionKey,
+    trustedProxyAddresses: ['172.20.0.2'],
+    bindAddress: '127.0.0.1',
+    port: 18443,
+    workerIntervalMs: 60_000,
+    workerId: 'production-test',
+    messageIdDomain: 'mail.msc.example',
+    mailPolicy: policy,
+    smtpAccounts: [{
+      account: 'msc-info',
+      host: 'smtp.example.org',
+      port: 465,
+      secure: true,
+      username: 'info@msc.example',
+      password: 'injected',
+      senderIdentity: 'info@msc.example',
+    }],
+    smtpClientFactory() {
+      return {
+        async sendMail(message) {
+          smtpCalls += 1;
+          return {
+            accepted: [message.to],
+            rejected: [],
+            pending: [],
+            messageId: message.messageId,
+          };
+        },
+      };
+    },
+    async providerRunner(args) {
+      assert.deepEqual(args, [
+        'preview',
+        '--account', 'msc-info',
+        '--folder', 'INBOX',
+        '--message-id', '42',
+      ]);
+      return {
+        stdout: JSON.stringify({
+          schema: 'msc.mail-provider.v1',
+          provider: 'himalaya',
+          operation: 'preview',
+          source: {},
+          data: {
+            id: '42',
+            from: 'recipient@example.net',
+            subject: 'Frage zur Veranstaltung',
+          },
+        }),
+      };
+    },
+  });
+  t.after(async () => composition.close());
+
+  const proposed = await composition.flow.proposeReplyFromSource({
+    account: 'msc-info',
+    folder: 'INBOX',
+    messageId: '42',
+    bodyText: 'Guten Tag,\n\nvielen Dank für die Anfrage.',
+    sources: ['MSC FAQ'],
+  }, 'telegram-approval-test');
+  const record = await composition.review.queue.review(proposed.actionId);
+  const payloadReference = record.payloadHash.slice(0, 12);
+
+  await assert.rejects(
+    composition.gatewayApprovalPreview(
+      proposed.actionId,
+      payloadReference,
+      'agent:main:telegram:direct:999',
+    ),
+    /not enabled for this session/,
+  );
+  await assert.rejects(
+    composition.gatewayApprovalPreview(
+      proposed.actionId,
+      '0'.repeat(12),
+      sessionKey,
+    ),
+    /payload reference does not match/,
+  );
+  assert.equal(
+    (await composition.gatewayApprovalPreview(
+      proposed.actionId,
+      payloadReference,
+      sessionKey,
+    )).title,
+    'Auf MSC-E-Mail antworten',
+  );
+
+  const dispatched = await composition.approveAndDispatchFromGateway({
+    actionId: proposed.actionId,
+    payloadReference,
+    sessionKey,
+    toolCallId: 'tool-call-1',
+  });
+  assert.equal(dispatched.status, 'accepted');
+  assert.equal(smtpCalls, 1);
+  assert.equal(
+    (await composition.review.approvals.get(proposed.actionId)).decidedBy,
+    'vinzenz',
+  );
+  await assert.rejects(
+    composition.approveAndDispatchFromGateway({
+      actionId: proposed.actionId,
+      payloadReference,
+      sessionKey,
+      toolCallId: 'tool-call-2',
+    }),
+    /consumed, not pending/,
+  );
+  assert.equal(smtpCalls, 1);
+});

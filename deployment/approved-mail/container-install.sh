@@ -15,6 +15,7 @@ readonly OPENCLAW_CONFIG="${OPENCLAW_STATE_DIR}/openclaw.json"
 readonly PRODUCTION_CONFIG="${CONFIG_ROOT}/production.json"
 readonly BOOTSTRAP_CONFIG="${CONFIG_ROOT}/bootstrap.json"
 readonly PUBLIC_ORIGIN="${MSC_APPROVED_MAIL_PUBLIC_ORIGIN:-https://openclaw.vinzenz-geisler.com}"
+readonly OPERATOR_SESSION_KEY="${MSC_APPROVED_MAIL_OPERATOR_SESSION_KEY:-agent:main:telegram:direct:8261978945}"
 readonly PUBLIC_BASE_PATH="/msc-approval"
 readonly RUNTIME_UID="$(id -u)"
 readonly RUNTIME_GID="$(id -g)"
@@ -146,6 +147,7 @@ write_configuration() {
     "$PRODUCTION_CONFIG" \
     "$BOOTSTRAP_CONFIG" \
     "$PUBLIC_ORIGIN" \
+    "$OPERATOR_SESSION_KEY" \
     "$trusted_proxy_ip" \
     "$STATE_ROOT" \
     "$CONFIG_ROOT" \
@@ -155,6 +157,7 @@ const [
   productionPath,
   bootstrapPath,
   publicOrigin,
+  operatorSessionKey,
   trustedProxy,
   stateRoot,
   configRoot,
@@ -194,6 +197,7 @@ const production = {
   basePath: '/msc-approval',
   rpId: new URL(publicOrigin).hostname,
   reviewerActor: 'vinzenz',
+  operatorSessionKey,
   trustedProxyAddresses: [trustedProxy],
   trustConfiguredActorWithoutHeader: true,
   bindInterface: 'eth0',
@@ -258,12 +262,16 @@ if (Array.isArray(plugins.allow) && !plugins.allow.includes('msc-approved-mail')
 }
 const tools = config.tools ??= {};
 if (Array.isArray(tools.allow)) {
-  if (!tools.allow.includes('msc_mail_reply_propose')) {
-    tools.allow.push('msc_mail_reply_propose');
+  for (const tool of ['msc_mail_reply_propose', 'msc_mail_reply_send']) {
+    if (!tools.allow.includes(tool)) tools.allow.push(tool);
   }
 } else {
   const alsoAllow = Array.isArray(tools.alsoAllow) ? tools.alsoAllow : [];
-  tools.alsoAllow = [...new Set([...alsoAllow, 'msc_mail_reply_propose'])];
+  tools.alsoAllow = [...new Set([
+    ...alsoAllow,
+    'msc_mail_reply_propose',
+    'msc_mail_reply_send',
+  ])];
 }
 const temporary = `${path}.msc-approved-mail.${process.pid}.tmp`;
 fs.writeFileSync(temporary, `${JSON.stringify(config, null, 2)}\n`, {
@@ -285,11 +293,8 @@ main() {
   write_configuration
   activate_files_and_config
   printf '\nMSC-Mail-Paket ist containerintern vorbereitet.\n'
-  printf 'Approval-Seite nach sicherem Gateway-Neustart: %s%s/register\n' \
-    "$PUBLIC_ORIGIN" "$PUBLIC_BASE_PATH"
-  printf 'Bootstrap-Code danach erzeugen:\n'
-  printf 'node %s/dist/src/passkey-bootstrap-operator-cli.js --config %s --actor vinzenz\n' \
-    "$APP_ROOT" "$BOOTSTRAP_CONFIG"
+  printf 'Mailversand: separate OpenClaw-Freigabe im Telegram-Direktchat %s\n' \
+    "$OPERATOR_SESSION_KEY"
   printf 'Konfigurationsbackup: %s\n' "$CONFIG_BACKUP"
 }
 
