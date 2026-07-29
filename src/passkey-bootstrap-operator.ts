@@ -42,8 +42,8 @@ export interface LoadTrustedOperatorConfigOptions {
 
 /**
  * Opens, verifies and reads the local operator policy through one descriptor.
- * The production default requires a root-owned regular file, permits at most
- * group-read access, and refuses symlinks through O_NOFOLLOW.
+ * The production default requires a runtime-user-owned regular file, permits
+ * at most group-read access, and refuses symlinks through O_NOFOLLOW.
  */
 export const loadTrustedOperatorConfig = async (
   path: string,
@@ -57,7 +57,8 @@ export const loadTrustedOperatorConfig = async (
   try {
     const stat = await handle.stat();
     if (!stat.isFile()) throw new Error('operator config must be a regular file');
-    const expectedOwnerUid = options.expectedOwnerUid ?? 0;
+    const expectedOwnerUid = options.expectedOwnerUid ??
+      process.getuid?.() ?? 0;
     if (stat.uid !== expectedOwnerUid) {
       throw new Error(`operator config must be owned by uid ${expectedOwnerUid}`);
     }

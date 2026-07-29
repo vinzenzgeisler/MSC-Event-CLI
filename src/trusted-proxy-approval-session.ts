@@ -8,6 +8,7 @@ export interface TrustedProxyApprovalSessionOptions {
   actor: string;
   csrfKey: Uint8Array;
   trustedProxyAddresses: string[];
+  trustConfiguredActorWithoutHeader?: boolean;
 }
 
 const normalizeAddress = (value: string): string =>
@@ -41,6 +42,7 @@ export class TrustedProxyApprovalSessionResolver {
   private readonly actor: string;
   private readonly csrfKey: Buffer;
   private readonly trustedProxyAddresses: Set<string>;
+  private readonly trustConfiguredActorWithoutHeader: boolean;
 
   constructor(options: TrustedProxyApprovalSessionOptions) {
     this.origin = new URL(options.publicOrigin);
@@ -63,6 +65,8 @@ export class TrustedProxyApprovalSessionResolver {
       throw new Error('at least one exact trusted proxy IP is required');
     }
     this.trustedProxyAddresses = new Set(addresses);
+    this.trustConfiguredActorWithoutHeader =
+      options.trustConfiguredActorWithoutHeader ?? false;
   }
 
   resolve(request: IncomingMessage): AuthenticatedApprovalSession | undefined {
@@ -74,7 +78,9 @@ export class TrustedProxyApprovalSessionResolver {
     const actor = exactHeader(request, 'x-msc-approval-actor');
     const proto = exactHeader(request, 'x-forwarded-proto');
     const host = exactHeader(request, 'x-forwarded-host');
-    if (!actor || !safeEqual(actor, this.actor) ||
+    if ((!this.trustConfiguredActorWithoutHeader &&
+        (!actor || !safeEqual(actor, this.actor))) ||
+        (actor !== undefined && !safeEqual(actor, this.actor)) ||
         proto !== 'https' || host !== this.origin.host) {
       return undefined;
     }

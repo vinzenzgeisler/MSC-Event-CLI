@@ -43,6 +43,7 @@ export interface MscMailProductionCompositionOptions {
   rpId: string;
   reviewerActor: string;
   trustedProxyAddresses: string[];
+  trustConfiguredActorWithoutHeader?: boolean;
   bindAddress: string;
   port: number;
   workerIntervalMs: number;
@@ -175,6 +176,12 @@ export class MscMailProductionComposition {
         actor: options.reviewerActor,
         csrfKey: options.sessionCsrfKey,
         trustedProxyAddresses: options.trustedProxyAddresses,
+        ...(options.trustConfiguredActorWithoutHeader === undefined
+          ? {}
+          : {
+              trustConfiguredActorWithoutHeader:
+                options.trustConfiguredActorWithoutHeader,
+            }),
       });
       this.adapter = new PrivateApprovalHttpAdapter({
         bindAddress: options.bindAddress,

@@ -48,6 +48,7 @@ const configSchema = z.object({
     (value) => isIP(value) > 0,
     'trusted proxy must be an exact IP',
   )).min(1).max(16),
+  trustConfiguredActorWithoutHeader: z.boolean().default(false),
   bindInterface: z.string().regex(/^[a-zA-Z0-9_.:-]{1,32}$/),
   port: z.number().int().min(1).max(65_535),
   workerIntervalMs: z.number().int().min(1_000).max(300_000),
@@ -149,6 +150,8 @@ export const loadMscMailProductionOptions = async (
     rpId: config.rpId,
     reviewerActor: config.reviewerActor,
     trustedProxyAddresses: config.trustedProxyAddresses,
+    trustConfiguredActorWithoutHeader:
+      config.trustConfiguredActorWithoutHeader,
     bindAddress: resolvePrivateInterfaceAddress(config.bindInterface),
     port: config.port,
     workerIntervalMs: config.workerIntervalMs,

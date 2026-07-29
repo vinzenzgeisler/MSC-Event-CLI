@@ -165,3 +165,67 @@ test('connects read, complete reply preview, fresh approval, outbox and one disp
   outbox.close();
   store.close();
 });
+
+test('creates a proposal from the exact read-only source returned by the provider', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'msc-mail-source-proposal-'));
+  const databasePath = join(directory, 'flow.sqlite');
+  const store = new SqliteApprovalStore(databasePath, {
+    encryptionKey: Buffer.alloc(32, 81),
+  });
+  const queue = new ApprovalQueue({
+    store,
+    signingKey: Buffer.alloc(32, 82),
+    freshAuthVerifier: {
+      async verify() {
+        throw new Error('must not approve');
+      },
+    },
+  });
+  const outbox = new SqliteDurableOutbox(databasePath, {
+    encryptionKey: Buffer.alloc(32, 81),
+  });
+  const provider = new MscMailReadonlyProvider(async () => ({
+    stdout: JSON.stringify({
+      schema: 'msc.mail-provider.v1',
+      provider: 'himalaya',
+      operation: 'preview',
+      source: { mailbox: 'MSC Info', account: 'msc-info', folder: 'INBOX' },
+      data: {
+        id: 44,
+        from: { addr: 'driver@example.org' },
+        subject: 'Rückfrage',
+      },
+    }),
+  }));
+  const flow = new MscMailFlow({
+    provider,
+    policy,
+    queue,
+    outboxCoordinator: new ApprovedActionOutboxCoordinator(queue, [
+      createMailReplyOutboxAdapter(policy),
+    ]),
+    dispatchWorker: new MailOutboxDispatchWorker(
+      outbox,
+      { async deliver() { throw new Error('must not send'); } },
+      { workerId: 'source-test', messageIdDomain: 'mail.msc.example' },
+    ),
+    approvalUrl: (actionId) => `https://approval.example/approve/${actionId}`,
+  });
+
+  const result = await flow.proposeReplyFromSource({
+    account: 'msc-info',
+    folder: 'INBOX',
+    messageId: '44',
+    bodyText: 'Guten Tag,\n\nhier ist die geprüfte Antwort.',
+    sources: ['msc/faq.md'],
+  }, 'reply:msc-info:44:v1');
+
+  assert.equal(result.status, 'pending');
+  assert.ok(result.preview.changes.some(
+    (change) => change.field === 'An' &&
+      change.after === 'driver@example.org',
+  ));
+  assert.throws(() => outbox.get(result.actionId), /unknown outbox action/i);
+  outbox.close();
+  store.close();
+});
