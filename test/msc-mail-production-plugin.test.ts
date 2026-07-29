@@ -35,46 +35,39 @@ const fixture = (registrationMode = 'full') => {
     },
   });
   const proposal = tools.find(
-    (tool) => typeof tool !== 'function',
+    (tool) => tool.name === 'msc_mail_reply_propose',
   );
-  const sendFactory = tools.find(
-    (tool) => typeof tool === 'function',
+  const send = tools.find(
+    (tool) => tool.name === 'msc_mail_reply_send',
   );
-  return { route, proposal, sendFactory, hook, service };
+  return { route, proposal, send, hook, service };
 };
 
 test('registers one native gateway route, service and both approval tools', () => {
-  const { route, proposal, sendFactory, hook, service } = fixture();
+  const { route, proposal, send, hook, service } = fixture();
   assert.equal(route?.path, '/msc-approval');
   assert.equal(route?.auth, 'plugin');
   assert.equal(route?.match, 'prefix');
   assert.equal(service?.id, 'msc-approved-mail');
-  assert.equal(proposal && typeof proposal !== 'function'
-    ? proposal.name
-    : undefined, 'msc_mail_reply_propose');
+  assert.equal(proposal?.name, 'msc_mail_reply_propose');
   assert.match(
-    proposal && typeof proposal !== 'function' ? proposal.description : '',
+    proposal?.description ?? '',
     /never sends mail/i,
   );
-  assert.equal(typeof sendFactory, 'function');
-  assert.equal(sendFactory!({
-    sessionKey: 'agent:main:telegram:direct:8261978945',
-  })?.name, 'msc_mail_reply_send');
+  assert.equal(send?.name, 'msc_mail_reply_send');
   assert.equal(typeof hook, 'function');
 });
 
 test('registers both tools during tool discovery without runtime surfaces', () => {
-  const { route, proposal, sendFactory, service } = fixture('tool-discovery');
+  const { route, proposal, send, service } = fixture('tool-discovery');
   assert.equal(route, undefined);
   assert.equal(service, undefined);
-  assert.equal(proposal && typeof proposal !== 'function'
-    ? proposal.name
-    : undefined, 'msc_mail_reply_propose');
-  assert.equal(typeof sendFactory, 'function');
+  assert.equal(proposal?.name, 'msc_mail_reply_propose');
+  assert.equal(send?.name, 'msc_mail_reply_send');
 });
 
 test('fails closed before service startup for HTTP and proposal execution', async () => {
-  const { route, proposal, sendFactory, hook } = fixture();
+  const { route, proposal, send, hook } = fixture();
   const request = {
     headers: {},
     method: 'GET',
@@ -96,7 +89,7 @@ test('fails closed before service startup for HTTP and proposal execution', asyn
   assert.equal(await route!.handler(request, response), true);
   assert.equal(status, 503);
   assert.equal(body, '{"error":"service_unavailable"}');
-  assert.ok(proposal && typeof proposal !== 'function');
+  assert.ok(proposal);
   await assert.rejects(
     proposal.execute('call-1', {
       account: 'msc-info',
@@ -107,11 +100,8 @@ test('fails closed before service startup for HTTP and proposal execution', asyn
     }),
     /service is not running/,
   );
-  const send = sendFactory!({
-    sessionKey: 'agent:main:telegram:direct:8261978945',
-  })!;
   await assert.rejects(
-    send.execute('call-2', {
+    send!.execute('call-2', {
       actionId: '10000000-0000-4000-8000-000000000001',
       payloadReference: 'abcdef012345',
     }),
