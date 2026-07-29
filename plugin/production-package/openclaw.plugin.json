@@ -8,11 +8,15 @@
   },
   "contracts": {
     "tools": [
+      "msc_mail_watch_list",
       "msc_mail_reply_propose",
       "msc_mail_reply_send"
     ]
   },
   "toolMetadata": {
+    "msc_mail_watch_list": {
+      "optional": true
+    },
     "msc_mail_reply_propose": {
       "optional": true
     },

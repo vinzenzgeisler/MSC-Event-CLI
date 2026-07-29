@@ -37,18 +37,23 @@ const fixture = (registrationMode = 'full') => {
   const proposal = tools.find(
     (tool) => tool.name === 'msc_mail_reply_propose',
   );
+  const watch = tools.find(
+    (tool) => tool.name === 'msc_mail_watch_list',
+  );
   const send = tools.find(
     (tool) => tool.name === 'msc_mail_reply_send',
   );
-  return { route, proposal, send, hook, service };
+  return { route, watch, proposal, send, hook, service };
 };
 
-test('registers one native gateway route, service and both approval tools', () => {
-  const { route, proposal, send, hook, service } = fixture();
+test('registers one native gateway route, service and three mail tools', () => {
+  const { route, watch, proposal, send, hook, service } = fixture();
   assert.equal(route?.path, '/msc-approval');
   assert.equal(route?.auth, 'plugin');
   assert.equal(route?.match, 'prefix');
   assert.equal(service?.id, 'msc-approved-mail');
+  assert.equal(watch?.name, 'msc_mail_watch_list');
+  assert.match(watch?.description ?? '', /read-only/i);
   assert.equal(proposal?.name, 'msc_mail_reply_propose');
   assert.match(
     proposal?.description ?? '',
@@ -58,10 +63,11 @@ test('registers one native gateway route, service and both approval tools', () =
   assert.equal(typeof hook, 'function');
 });
 
-test('registers both tools during tool discovery without runtime surfaces', () => {
-  const { route, proposal, send, service } = fixture('tool-discovery');
+test('registers all tools during tool discovery without runtime surfaces', () => {
+  const { route, watch, proposal, send, service } = fixture('tool-discovery');
   assert.equal(route, undefined);
   assert.equal(service, undefined);
+  assert.equal(watch?.name, 'msc_mail_watch_list');
   assert.equal(proposal?.name, 'msc_mail_reply_propose');
   assert.equal(send?.name, 'msc_mail_reply_send');
 });

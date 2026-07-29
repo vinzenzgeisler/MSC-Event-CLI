@@ -93,6 +93,7 @@ export class MscMailProductionComposition {
   readonly sessionResolver: TrustedProxyApprovalSessionResolver;
   readonly adapter: PrivateApprovalHttpAdapter;
   readonly host: MscOperationsHostRuntime;
+  readonly provider: MscMailReadonlyProvider;
   private closed = false;
   private readonly reviewerActor: string;
   private readonly operatorSessionKey: string | undefined;
@@ -156,7 +157,7 @@ export class MscMailProductionComposition {
         this.review.http,
         this.registrationHttp,
       );
-      const provider = new MscMailReadonlyProvider(options.providerRunner);
+      this.provider = new MscMailReadonlyProvider(options.providerRunner);
       const transport = new SmtpMailTransport(
         options.smtpAccounts,
         options.smtpClientFactory,
@@ -170,7 +171,7 @@ export class MscMailProductionComposition {
         },
       );
       this.flow = new MscMailFlow({
-        provider,
+        provider: this.provider,
         policy: options.mailPolicy,
         queue: this.review.queue,
         outboxCoordinator: new ApprovedActionOutboxCoordinator(
