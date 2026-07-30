@@ -173,7 +173,7 @@ const replySignature = [
   'Vinzenz Geisler',
   'i. A. MSC Oberlausitzer Dreiländereck e. V.',
   '📞 +49 152 52971212',
-  '🌐 www.msc-oberlausitzer-dreilaendereck.eu',
+  '🌐 www.msc-oberlausitz.de',
 ].join('\n');
 const accounts = {};
 const smtpAccounts = [];
