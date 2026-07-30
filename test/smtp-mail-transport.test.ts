@@ -33,6 +33,9 @@ test('pins TLS, account, envelope and safe plain-text message options', async ()
   const factory: SmtpClientFactory = (options) => {
     factoryOptions.push(options);
     return {
+      async verify() {
+        return true;
+      },
       async sendMail(message) {
         messages.push(message);
         return {
@@ -76,6 +79,41 @@ test('pins TLS, account, envelope and safe plain-text message options', async ()
     disableFileAccess: true,
     disableUrlAccess: true,
   }]);
+});
+
+test('checks SMTP readiness without submitting a message', async () => {
+  let verifyCalls = 0;
+  let sendCalls = 0;
+  const ready = new SmtpMailTransport([config], () => ({
+    async verify() {
+      verifyCalls += 1;
+      return true;
+    },
+    async sendMail() {
+      sendCalls += 1;
+      throw new Error('must not send');
+    },
+  }));
+  assert.deepEqual(await ready.checkReady('msc-info'), { ready: true });
+  assert.equal(verifyCalls, 1);
+  assert.equal(sendCalls, 0);
+
+  const unavailable = new SmtpMailTransport([config], () => ({
+    async verify() {
+      throw new Error('connect timeout');
+    },
+    async sendMail() {
+      throw new Error('must not send');
+    },
+  }));
+  assert.deepEqual(await unavailable.checkReady('msc-info'), {
+    ready: false,
+    reasonCode: 'smtp-unreachable',
+  });
+  assert.deepEqual(await unavailable.checkReady('msc-vorstand'), {
+    ready: false,
+    reasonCode: 'account-not-configured',
+  });
 });
 
 test('fails before submission for missing account or sender mismatch', async () => {

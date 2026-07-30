@@ -43,6 +43,7 @@ const smtpAccountSchema = z.object({
 export type SmtpMailAccountConfig = z.infer<typeof smtpAccountSchema>;
 
 interface SmtpClient {
+  verify?(): Promise<boolean>;
   sendMail(message: {
     envelope: { from: string; to: string[] };
     from: string;
@@ -63,6 +64,13 @@ interface SmtpClient {
 
 export type SmtpClientFactory = (options: SMTPTransport.Options) => SmtpClient;
 
+export type SmtpReadinessResult =
+  | { ready: true }
+  | {
+    ready: false;
+    reasonCode: 'account-not-configured' | 'smtp-unreachable';
+  };
+
 const defaultFactory: SmtpClientFactory = (options) =>
   nodemailer.createTransport(options) as SmtpClient;
 
@@ -80,8 +88,11 @@ const normalizedAddress = (value: unknown): string => {
 
 /**
  * SMTP implementation for the already approval-gated outbox. Construction is
- * inert. It exposes no verify/test command and cannot select a default account.
- * Every exception is ambiguous and therefore quarantined by the worker.
+ * inert. It cannot select a default account. `checkReady` authenticates against
+ * one explicitly selected SMTP account without submitting a message, allowing
+ * the approval hook to fail closed before an operator approval is consumed.
+ * Every exception during actual delivery remains ambiguous and is therefore
+ * quarantined by the worker.
  */
 export class SmtpMailTransport implements MailTransport {
   private readonly clients = new Map<
@@ -124,6 +135,23 @@ export class SmtpMailTransport implements MailTransport {
           debug: false,
         }),
       });
+    }
+  }
+
+  async checkReady(account: MscMailAccount): Promise<SmtpReadinessResult> {
+    const selected = this.clients.get(account);
+    if (!selected) {
+      return { ready: false, reasonCode: 'account-not-configured' };
+    }
+    if (!selected.client.verify) {
+      return { ready: false, reasonCode: 'smtp-unreachable' };
+    }
+    try {
+      return await selected.client.verify()
+        ? { ready: true }
+        : { ready: false, reasonCode: 'smtp-unreachable' };
+    } catch {
+      return { ready: false, reasonCode: 'smtp-unreachable' };
     }
   }
 

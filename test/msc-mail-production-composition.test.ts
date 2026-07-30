@@ -65,6 +65,9 @@ test('builds a complete but inert mail production composition', async (t) => {
     }],
     smtpClientFactory() {
       return {
+        async verify() {
+          return true;
+        },
         async sendMail() {
           smtpCalls += 1;
           throw new Error('must not send');
@@ -166,6 +169,9 @@ test('binds one Telegram operator approval to one exact mail proposal and SMTP a
     }],
     smtpClientFactory() {
       return {
+        async verify() {
+          return true;
+        },
         async sendMail(message) {
           smtpCalls += 1;
           return {
@@ -235,6 +241,11 @@ test('binds one Telegram operator approval to one exact mail proposal and SMTP a
     )).title,
     'Auf MSC-E-Mail antworten',
   );
+  await composition.assertGatewaySmtpReady(
+    proposed.actionId,
+    payloadReference,
+    sessionKey,
+  );
 
   const dispatched = await composition.approveAndDispatchFromGateway({
     actionId: proposed.actionId,
@@ -280,6 +291,11 @@ test('binds one Telegram operator approval to one exact mail proposal and SMTP a
       sessionKey,
     )).title,
     'MSC-E-Mail senden',
+  );
+  await composition.assertGatewaySmtpReady(
+    sendRecord.actionId,
+    sendPayloadReference,
+    sessionKey,
   );
   assert.equal(
     (await composition.approveAndDispatchFromGateway({

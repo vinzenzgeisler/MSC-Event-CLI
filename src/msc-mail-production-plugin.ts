@@ -354,6 +354,11 @@ export const registerMscMailProductionPlugin = (
         parsed.data.payloadReference,
         sessionKey,
       );
+      await composition.assertGatewaySmtpReady(
+        parsed.data.actionId,
+        parsed.data.payloadReference,
+        sessionKey,
+      );
     } catch (error) {
       return {
         block: true,
