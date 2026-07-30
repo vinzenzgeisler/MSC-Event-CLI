@@ -60,11 +60,19 @@ class ContainerInstallTests(unittest.TestCase):
                 "msc_mail_watch_list",
                 "msc_mail_reply_propose",
                 "msc_mail_reply_send",
+                "msc_event_entry_change_propose",
+                "msc_event_entry_change_execute",
             ],
         )
         self.assertTrue(manifest["toolMetadata"]["msc_mail_watch_list"]["optional"])
         self.assertTrue(manifest["toolMetadata"]["msc_mail_reply_propose"]["optional"])
         self.assertTrue(manifest["toolMetadata"]["msc_mail_reply_send"]["optional"])
+        self.assertTrue(
+            manifest["toolMetadata"]["msc_event_entry_change_propose"]["optional"]
+        )
+        self.assertTrue(
+            manifest["toolMetadata"]["msc_event_entry_change_execute"]["optional"]
+        )
 
     def test_installer_binds_signature_and_nennung_bcc_policy(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")

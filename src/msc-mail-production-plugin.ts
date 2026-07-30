@@ -5,6 +5,13 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { ActionPreview, JsonValue } from './action.js';
+import { loadAccessToken } from './auth.js';
+import { parseBaseUrl } from './config.js';
+import {
+  eventEntryOperationSchema,
+  type EventEntryOperation,
+} from './event-approved-action.js';
+import { EventEntryHttpMutationTransport } from './event-http-mutation-transport.js';
 import { MscMailProductionComposition } from './msc-mail-production-composition.js';
 import { loadMscMailProductionOptions } from './msc-mail-production-config.js';
 
@@ -48,8 +55,23 @@ type MailWatchTool = {
   ): Promise<ToolResult>;
 };
 
+type EventProposalTool = {
+  name: 'msc_event_entry_change_propose';
+  description: string;
+  parameters: Record<string, unknown>;
+  execute(id: string, params: Record<string, unknown>): Promise<ToolResult>;
+};
+
+type EventExecuteTool = {
+  name: 'msc_event_entry_change_execute';
+  description: string;
+  parameters: Record<string, unknown>;
+  execute(id: string, params: Record<string, unknown>): Promise<ToolResult>;
+};
+
 const APPROVAL_BASE_PATH = '/msc-approval';
 const SEND_TOOL_NAME = 'msc_mail_reply_send';
+const EVENT_EXECUTE_TOOL_NAME = 'msc_event_entry_change_execute';
 const AUTHORIZATION_NONCE_PARAM = 'operatorApprovalNonce';
 
 export interface MscMailProductionPluginApi {
@@ -64,7 +86,12 @@ export interface MscMailProductionPluginApi {
     ): Promise<boolean>;
   }): void;
   registerTool(
-    tool: ReplyProposalTool | ReplySendTool | MailWatchTool,
+    tool:
+      | ReplyProposalTool
+      | ReplySendTool
+      | MailWatchTool
+      | EventProposalTool
+      | EventExecuteTool,
     options: { optional: true },
   ): void;
   on(
@@ -121,6 +148,18 @@ const sendInputSchema = z.object({
 }).strict();
 
 const watchInputSchema = z.object({}).strict();
+const eventProposalInputSchema = z.object({
+  entryId: z.string().uuid(),
+  operation: eventEntryOperationSchema,
+  label: z.string().trim().min(1).max(500).optional(),
+  idempotencyKey: z.string().trim().min(8).max(200),
+  ttlSeconds: z.number().int().min(60).max(3_600).default(900),
+}).strict();
+const eventExecuteInputSchema = z.object({
+  actionId: z.string().uuid(),
+  payloadReference: z.string().regex(/^[a-f0-9]{12}$/),
+  operatorApprovalNonce: z.string().uuid().optional(),
+}).strict();
 const watchEnvelopeSchema = z.object({
   source: z.object({
     account: z.enum(['msc-nennung', 'msc-info', 'msc-vorstand']),
@@ -237,6 +276,13 @@ export const registerMscMailProductionPlugin = (
     toolCallId: string;
     expiresAtMs: number;
   }>();
+  const approvedEventCalls = new Map<string, {
+    actionId: string;
+    payloadReference: string;
+    sessionKey: string;
+    toolCallId: string;
+    expiresAtMs: number;
+  }>();
 
   api.registerTool({
     name: 'msc_mail_watch_list',
@@ -269,6 +315,110 @@ export const registerMscMailProductionPlugin = (
         readOnly: true,
         folder: 'INBOX',
         accounts,
+      };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(details) }],
+        details,
+      };
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: 'msc_event_entry_change_propose',
+    description:
+      'Read one MSC registration, bind its current state and create an encrypted proposal for one typed change. This tool never mutates the backend.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['entryId', 'operation', 'idempotencyKey'],
+      properties: {
+        entryId: { type: 'string', format: 'uuid' },
+        operation: { type: 'object' },
+        label: { type: 'string' },
+        idempotencyKey: { type: 'string', minLength: 8 },
+        ttlSeconds: {
+          type: 'integer',
+          minimum: 60,
+          maximum: 3_600,
+          default: 900,
+        },
+      },
+    },
+    async execute(_id, params) {
+      if (!composition?.eventProposals) {
+        throw new Error('MSC event mutation service is not running');
+      }
+      const input = eventProposalInputSchema.parse(params);
+      const result = await composition.eventProposals.proposeEventEntryChange({
+        entryId: input.entryId,
+        operation: input.operation as EventEntryOperation,
+        idempotencyKey: input.idempotencyKey,
+        ttlSeconds: input.ttlSeconds,
+        ...(input.label === undefined ? {} : { label: input.label }),
+      });
+      const details = {
+        mutatesBackend: false,
+        requiresSeparateOperatorApproval: true,
+        ...result,
+      };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(details) }],
+        details,
+      };
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: EVENT_EXECUTE_TOOL_NAME,
+    description:
+      'Execute one existing exact MSC registration change proposal. OpenClaw blocks this tool until Vinzenz approves this exact call once.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['actionId', 'payloadReference'],
+      properties: {
+        actionId: { type: 'string', format: 'uuid' },
+        payloadReference: { type: 'string', pattern: '^[a-f0-9]{12}$' },
+        operatorApprovalNonce: {
+          type: 'string',
+          format: 'uuid',
+          description: 'Injected by the OpenClaw approval hook.',
+        },
+      },
+    },
+    async execute(id, params) {
+      if (!composition) {
+        throw new Error('MSC event mutation service is not running');
+      }
+      const input = eventExecuteInputSchema.parse(params);
+      if (!input.operatorApprovalNonce) {
+        throw new Error('operator approval is missing');
+      }
+      const authorization = approvedEventCalls.get(
+        input.operatorApprovalNonce,
+      );
+      approvedEventCalls.delete(input.operatorApprovalNonce);
+      if (!authorization ||
+          authorization.expiresAtMs <= Date.now() ||
+          authorization.actionId !== input.actionId ||
+          authorization.payloadReference !== input.payloadReference ||
+          authorization.toolCallId !== id) {
+        throw new Error(
+          'operator approval is missing or does not match this tool call',
+        );
+      }
+      const result = await composition.approveAndExecuteEventFromGateway({
+        actionId: input.actionId,
+        payloadReference: input.payloadReference,
+        sessionKey: authorization.sessionKey,
+        toolCallId: id,
+      });
+      const details = {
+        mutatesBackend: true,
+        approvalMethod: 'openclaw-plugin-approval',
+        actionId: result.actionId,
+        kind: result.kind,
+        result: result.result,
       };
       return {
         content: [{ type: 'text', text: JSON.stringify(details) }],
@@ -395,6 +545,77 @@ export const registerMscMailProductionPlugin = (
   }, { optional: true });
 
   api.on('before_tool_call', async (event, context) => {
+    if (event.toolName === EVENT_EXECUTE_TOOL_NAME) {
+      if (!composition) {
+        return {
+          block: true,
+          blockReason: 'MSC event mutation service is not running',
+        };
+      }
+      const parsed = eventExecuteInputSchema.omit({
+        operatorApprovalNonce: true,
+      }).safeParse(event.params);
+      const sessionKey = context.sessionKey ?? '';
+      const toolCallId = event.toolCallId ?? context.toolCallId ?? '';
+      if (!parsed.success || !toolCallId) {
+        return {
+          block: true,
+          blockReason: 'event mutation request is incomplete or invalid',
+        };
+      }
+      let preview;
+      try {
+        preview = await composition.gatewayEventApprovalPreview(
+          parsed.data.actionId,
+          parsed.data.payloadReference,
+          sessionKey,
+        );
+      } catch (error) {
+        return {
+          block: true,
+          blockReason: error instanceof Error
+            ? error.message
+            : 'event mutation cannot be approved',
+        };
+      }
+      const nonce = randomUUID();
+      const description = [
+        'Diese Änderung genau einmal ausführen',
+        `Ziel: ${preview.target}`,
+        `Aktion: ${preview.summary}`,
+        '',
+        ...preview.changes.map((change) =>
+          `${change.field}: ${displayValue(change.before) ?? '—'} → ${
+            displayValue(change.after) ?? '—'
+          }`),
+        '',
+        `Prüfreferenz: ${parsed.data.payloadReference}`,
+        'Der aktuelle Stand wird vor dem Schreiben erneut geprüft und danach zur Kontrolle erneut gelesen.',
+      ].join('\n');
+      return {
+        params: {
+          ...event.params,
+          [AUTHORIZATION_NONCE_PARAM]: nonce,
+        },
+        requireApproval: {
+          title: preview.title.slice(0, 80),
+          description,
+          severity: 'critical',
+          allowedDecisions: ['allow-once', 'deny'],
+          timeoutMs: 600_000,
+          onResolution(decision) {
+            if (decision !== 'allow-once') return;
+            approvedEventCalls.set(nonce, {
+              actionId: parsed.data.actionId,
+              payloadReference: parsed.data.payloadReference,
+              sessionKey,
+              toolCallId,
+              expiresAtMs: Date.now() + 60_000,
+            });
+          },
+        },
+      };
+    }
     if (event.toolName !== SEND_TOOL_NAME) return undefined;
     if (!composition) {
       return {
@@ -498,8 +719,23 @@ export const registerMscMailProductionPlugin = (
           `MSC approved mail basePath must be ${APPROVAL_BASE_PATH}`,
         );
       }
+      const eventBaseUrlRaw = process.env.MSC_EVENT_API_URL?.trim();
+      const eventMutationTransport = eventBaseUrlRaw
+        ? new EventEntryHttpMutationTransport({
+          baseUrl: parseBaseUrl(eventBaseUrlRaw),
+          tokenProvider: (scope) => loadAccessToken({
+            env: {
+              ...process.env,
+              MSC_EVENT_COGNITO_SCOPE: scope,
+            },
+          }),
+        })
+        : undefined;
       const candidate = new MscMailProductionComposition({
         ...options,
+        ...(eventMutationTransport === undefined
+          ? {}
+          : { eventMutationTransport }),
         lifecycle: noListenerLifecycle,
       });
       try {

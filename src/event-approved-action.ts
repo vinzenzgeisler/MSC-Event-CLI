@@ -13,7 +13,7 @@ import {
 } from './action.js';
 
 const entryIdSchema = z.string().uuid();
-const operationSchema = z.union([
+export const eventEntryOperationSchema = z.union([
   z.object({
     type: z.literal('acceptance-status'),
     acceptanceStatus: z.enum(['pending', 'shortlist', 'accepted', 'rejected']),
@@ -68,7 +68,8 @@ const operationSchema = z.union([
   }).strict(),
 ]);
 
-export type EventEntryOperation = z.infer<typeof operationSchema> & JsonValue;
+export type EventEntryOperation =
+  z.infer<typeof eventEntryOperationSchema> & JsonValue;
 
 const stateSchema = z.object({
   entryId: entryIdSchema,
@@ -76,7 +77,7 @@ const stateSchema = z.object({
 }).strict();
 const afterSchema = z.object({
   entryId: entryIdSchema,
-  operation: operationSchema,
+  operation: eventEntryOperationSchema,
 }).strict();
 const parametersSchema = z.object({
   executionMode: z.literal('approved-change'),
@@ -149,7 +150,9 @@ export const createEventEntryChangeIntent = (
 ): EventEntryChangeIntent => {
   const entryId = entryIdSchema.parse(draft.entryId);
   const snapshot = jsonValueSchema.parse(draft.currentSnapshot);
-  const operation = operationSchema.parse(draft.operation) as EventEntryOperation;
+  const operation = eventEntryOperationSchema.parse(
+    draft.operation,
+  ) as EventEntryOperation;
   return parseEventEntryChangeIntent({
     version: 1,
     kind: 'event.entry.update',
@@ -219,10 +222,20 @@ export class EventEntryChangeAdapter implements
     context: ExecutionContext,
   ): Promise<ExecutionResult> {
     const intent = parseEventEntryChangeIntent(value);
-    return this.transport.apply(
+    const applied = await this.transport.apply(
       intent.target.id,
       intent.after.operation,
       context,
     );
+    const verifiedSnapshot = await this.readCurrentSnapshot(intent.target.id);
+    return {
+      ...(applied.externalId === undefined
+        ? {}
+        : { externalId: applied.externalId }),
+      result: {
+        mutation: applied.result,
+        verifiedSnapshot,
+      },
+    };
   }
 }

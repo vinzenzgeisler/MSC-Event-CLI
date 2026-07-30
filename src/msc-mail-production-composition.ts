@@ -1,8 +1,12 @@
 import type { Server } from 'node:http';
 import { createHmac } from 'node:crypto';
-import type { ActionPreview } from './action.js';
+import type { ActionPreview, JsonValue } from './action.js';
 import type { MailDispatchResult } from './mail-outbox-transport.js';
-import { ApprovedActionOutboxCoordinator } from './approval-execution.js';
+import {
+  ApprovedActionExecutionCoordinator,
+  ApprovedActionOutboxCoordinator,
+  type ApprovedActionExecution,
+} from './approval-execution.js';
 import { SqliteDurableOutbox } from './durable-outbox.js';
 import {
   createMailReplyOutboxAdapter,
@@ -18,6 +22,14 @@ import {
   type MscMailAccountPolicy,
 } from './mail-approved-action.js';
 import { MscMailReadonlyProvider } from './mail-readonly-provider.js';
+import {
+  EventEntryChangeAdapter,
+  EventEntryChangePreviewRenderer,
+  parseEventEntryChangeIntent,
+  type EventEntryMutationTransport,
+} from './event-approved-action.js';
+import { MscEventReadonlyProvider } from './event-readonly-provider.js';
+import { MscApprovalProposalWriter } from './msc-approval-proposal.js';
 import { MailOutboxDispatchWorker } from './mail-outbox-transport.js';
 import { MscApprovalReviewComposition } from './msc-approval-review-composition.js';
 import { MscApprovalHttpRouter } from './msc-approval-http-router.js';
@@ -65,6 +77,8 @@ export interface MscMailProductionCompositionOptions {
   verifyRegistration?: WebAuthnRegistrationOptions['verifyRegistration'];
   smtpClientFactory?: SmtpClientFactory;
   providerRunner?: ConstructorParameters<typeof MscMailReadonlyProvider>[0];
+  eventProviderRunner?: ConstructorParameters<typeof MscEventReadonlyProvider>[0];
+  eventMutationTransport?: EventEntryMutationTransport;
   lifecycle?: {
     listen(
       server: Server,
@@ -95,6 +109,9 @@ export class MscMailProductionComposition {
   readonly host: MscOperationsHostRuntime;
   readonly provider: MscMailReadonlyProvider;
   readonly smtpTransport: SmtpMailTransport;
+  readonly eventProvider: MscEventReadonlyProvider | undefined;
+  readonly eventProposals: MscApprovalProposalWriter | undefined;
+  readonly eventCoordinator: ApprovedActionExecutionCoordinator | undefined;
   private closed = false;
   private readonly reviewerActor: string;
   private readonly operatorSessionKey: string | undefined;
@@ -190,6 +207,26 @@ export class MscMailProductionComposition {
         this.review.http,
         this.review.queue,
       );
+      this.eventProvider = options.eventMutationTransport
+        ? new MscEventReadonlyProvider(options.eventProviderRunner)
+        : undefined;
+      this.eventProposals = this.eventProvider
+        ? new MscApprovalProposalWriter(
+          this.eventProvider,
+          this.provider,
+          this.review.queue,
+          options.publicOrigin + options.basePath,
+          options.mailPolicy,
+        )
+        : undefined;
+      this.eventCoordinator = this.eventProvider && options.eventMutationTransport
+        ? new ApprovedActionExecutionCoordinator(this.review.queue, [
+          new EventEntryChangeAdapter(
+            (entryId) => this.eventProvider!.detail(entryId) as Promise<JsonValue>,
+            options.eventMutationTransport,
+          ),
+        ])
+        : undefined;
       this.sessionResolver = new TrustedProxyApprovalSessionResolver({
         publicOrigin: options.publicOrigin,
         actor: options.reviewerActor,
@@ -246,6 +283,55 @@ export class MscMailProductionComposition {
     return record.intent.kind === 'mail.reply'
       ? new MailReplyPreviewRenderer().render(parseMailReplyIntent(record.intent))
       : new MailSendPreviewRenderer().render(parseMailSendIntent(record.intent));
+  }
+
+  async gatewayEventApprovalPreview(
+    actionId: string,
+    payloadReference: string,
+    sessionKey: string,
+  ): Promise<ActionPreview> {
+    this.assertGatewayOperatorSession(sessionKey);
+    if (!this.eventCoordinator) {
+      throw new Error('MSC event mutation service is not configured');
+    }
+    const record = await this.review.queue.review(actionId);
+    if (record.intent.kind !== 'event.entry.update') {
+      throw new Error('gateway event approval supports only entry updates');
+    }
+    if (record.payloadHash.slice(0, 12) !== payloadReference) {
+      throw new Error('payload reference does not match the pending action');
+    }
+    return new EventEntryChangePreviewRenderer().render(
+      parseEventEntryChangeIntent(record.intent),
+    );
+  }
+
+  async approveAndExecuteEventFromGateway(options: {
+    actionId: string;
+    payloadReference: string;
+    sessionKey: string;
+    toolCallId: string;
+  }): Promise<ApprovedActionExecution> {
+    this.assertGatewayOperatorSession(options.sessionKey);
+    if (!this.eventCoordinator) {
+      throw new Error('MSC event mutation service is not configured');
+    }
+    await this.gatewayEventApprovalPreview(
+      options.actionId,
+      options.payloadReference,
+      options.sessionKey,
+    );
+    const decidedAt = new Date().toISOString();
+    await this.review.approvals.decide({
+      actionId: options.actionId,
+      decision: 'approve',
+      decidedAt,
+      decidedBy: this.reviewerActor,
+      expiresAfter: decidedAt,
+      authenticationMethod: 'gateway-operator',
+      assertionId: `openclaw-plugin:${options.toolCallId}`,
+    });
+    return this.eventCoordinator.execute(options.actionId);
   }
 
   async assertGatewaySmtpReady(

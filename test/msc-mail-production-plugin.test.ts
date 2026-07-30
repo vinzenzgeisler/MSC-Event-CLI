@@ -44,11 +44,35 @@ const fixture = (registrationMode = 'full') => {
   const send = tools.find(
     (tool) => tool.name === 'msc_mail_reply_send',
   );
-  return { route, watch, proposal, send, hook, service };
+  const eventProposal = tools.find(
+    (tool) => tool.name === 'msc_event_entry_change_propose',
+  );
+  const eventExecute = tools.find(
+    (tool) => tool.name === 'msc_event_entry_change_execute',
+  );
+  return {
+    route,
+    watch,
+    proposal,
+    send,
+    eventProposal,
+    eventExecute,
+    hook,
+    service,
+  };
 };
 
-test('registers one native gateway route, service and three mail tools', () => {
-  const { route, watch, proposal, send, hook, service } = fixture();
+test('registers one native gateway route, service and five MSC tools', () => {
+  const {
+    route,
+    watch,
+    proposal,
+    send,
+    eventProposal,
+    eventExecute,
+    hook,
+    service,
+  } = fixture();
   assert.equal(route?.path, '/msc-approval');
   assert.equal(route?.auth, 'plugin');
   assert.equal(route?.match, 'prefix');
@@ -61,16 +85,29 @@ test('registers one native gateway route, service and three mail tools', () => {
     /never sends mail/i,
   );
   assert.equal(send?.name, 'msc_mail_reply_send');
+  assert.equal(eventProposal?.name, 'msc_event_entry_change_propose');
+  assert.match(eventProposal?.description ?? '', /never mutates/i);
+  assert.equal(eventExecute?.name, 'msc_event_entry_change_execute');
   assert.equal(typeof hook, 'function');
 });
 
 test('registers all tools during tool discovery without runtime surfaces', () => {
-  const { route, watch, proposal, send, service } = fixture('tool-discovery');
+  const {
+    route,
+    watch,
+    proposal,
+    send,
+    eventProposal,
+    eventExecute,
+    service,
+  } = fixture('tool-discovery');
   assert.equal(route, undefined);
   assert.equal(service, undefined);
   assert.equal(watch?.name, 'msc_mail_watch_list');
   assert.equal(proposal?.name, 'msc_mail_reply_propose');
   assert.equal(send?.name, 'msc_mail_reply_send');
+  assert.equal(eventProposal?.name, 'msc_event_entry_change_propose');
+  assert.equal(eventExecute?.name, 'msc_event_entry_change_execute');
 });
 
 test('renders a clear approval with BCC, exact body and signature', () => {
@@ -110,7 +147,7 @@ test('renders a clear approval with BCC, exact body and signature', () => {
 });
 
 test('fails closed before service startup for HTTP and proposal execution', async () => {
-  const { route, proposal, send, hook } = fixture();
+  const { route, proposal, send, eventProposal, eventExecute, hook } = fixture();
   const request = {
     headers: {},
     method: 'GET',
@@ -140,6 +177,24 @@ test('fails closed before service startup for HTTP and proposal execution', asyn
       bodyText: 'Entwurf',
       sources: ['msc/faq.md'],
       idempotencyKey: 'reply-test-1',
+    }),
+    /service is not running/,
+  );
+  await assert.rejects(
+    eventProposal!.execute('call-3', {
+      entryId: '10000000-0000-4000-8000-000000000001',
+      operation: {
+        type: 'checkin-id-verification',
+        checkinIdVerified: true,
+      },
+      idempotencyKey: 'entry-test-1',
+    }),
+    /service is not running/,
+  );
+  await assert.rejects(
+    eventExecute!.execute('call-4', {
+      actionId: '10000000-0000-4000-8000-000000000001',
+      payloadReference: 'abcdef012345',
     }),
     /service is not running/,
   );

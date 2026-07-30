@@ -143,7 +143,10 @@ test('reads current state before applying the approved typed mutation', async ()
     approvedAt: '2026-07-25T22:50:00.000Z',
   };
   assert.deepEqual(await adapter.execute(intent, context), {
-    result: { ok: true },
+    result: {
+      mutation: { ok: true },
+      verifiedSnapshot: snapshot,
+    },
   });
   assert.deepEqual(applied, [{
     id: entryId,

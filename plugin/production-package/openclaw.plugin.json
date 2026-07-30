@@ -1,7 +1,7 @@
 {
   "id": "msc-approved-mail",
-  "name": "MSC Approved Mail",
-  "description": "Operator-approved MSC mail replies with encrypted state and exactly one SMTP attempt.",
+  "name": "MSC Operations",
+  "description": "Typed MSC reads, approval-gated registration changes, mail monitoring and exactly-once mail attempts.",
   "version": "0.1.0",
   "activation": {
     "onStartup": true
@@ -10,7 +10,9 @@
     "tools": [
       "msc_mail_watch_list",
       "msc_mail_reply_propose",
-      "msc_mail_reply_send"
+      "msc_mail_reply_send",
+      "msc_event_entry_change_propose",
+      "msc_event_entry_change_execute"
     ]
   },
   "toolMetadata": {
@@ -21,6 +23,12 @@
       "optional": true
     },
     "msc_mail_reply_send": {
+      "optional": true
+    },
+    "msc_event_entry_change_propose": {
+      "optional": true
+    },
+    "msc_event_entry_change_execute": {
       "optional": true
     }
   },
