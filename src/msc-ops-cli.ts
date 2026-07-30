@@ -16,6 +16,12 @@ import {
   openMscApprovalProposalWriter,
   readOperatorDraftFile,
 } from './msc-approval-proposal.js';
+import { selfDeploy } from './self-deploy.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { readFile } from 'node:fs/promises';
+
+const execFileAsync = promisify(execFile);
 
 const output = (value: unknown): void => {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -219,6 +225,113 @@ const approval = program.command('approval').description('Freigaben bedienen');
 approval.command('demo')
   .description('Den vollständigen Mail-Freigabeflow lokal demonstrieren')
   .action(async () => output(await runMailFlowDemo()));
+
+// ─── deploy ──────────────────────────────────────────────────────────────────
+const deploy = program.command('deploy').description('OpenClaw-Dienste via Docker aktualisieren');
+deploy.command('openclaw')
+  .description('OpenClaw-Container über Docker-Socket neu starten (docker compose up -d --no-deps openclaw)')
+  .option('--project <name>', 'Docker-Compose-Projektname', 'openclaw')
+  .option('--compose-file <path>', 'Pfad zur docker-compose.yml (optional)')
+  .option('--timeout <seconds>', 'Timeout in Sekunden', (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 1) throw new Error('Timeout muss eine positive Zahl sein');
+    return n;
+  }, 120)
+  .option('--dry-run', 'Befehl ausgeben, aber nicht ausführen')
+  .action(async (options: {
+    project: string;
+    composeFile?: string;
+    timeout: number;
+    dryRun?: boolean;
+  }) => {
+    const result = await selfDeploy('openclaw', {
+      projectName: options.project,
+      ...(options.composeFile !== undefined ? { composeFile: options.composeFile } : {}),
+      timeoutMs: options.timeout * 1000,
+      ...(options.dryRun !== undefined ? { dryRun: options.dryRun } : {}),
+    });
+    output(result);
+  });
+
+// ─── inbox-watcher ───────────────────────────────────────────────────────────
+const inboxWatcher = program
+  .command('inbox-watcher')
+  .description('MSC Posteingangs-Wächter konfigurieren');
+inboxWatcher.command('setup')
+  .description('Posteingangs-Wächter als OpenClaw-Cronjob registrieren')
+  .option('--trigger-file <path>', 'Pfad zur inbox-watcher-trigger.js',
+    '/home/node/.openclaw/msc-approved-mail/app/deployment/approved-mail/inbox-watcher-trigger.js')
+  .option('--interval <minutes>', 'Abfrageintervall in Minuten', (v) => {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1 || n > 60) throw new Error('Intervall muss 1–60 sein');
+    return n;
+  }, 5)
+  .option('--dry-run', 'Befehl ausgeben, aber nicht ausführen')
+  .action(async (options: {
+    triggerFile: string;
+    interval: number;
+    dryRun?: boolean;
+  }) => {
+    const cronExpr = `*/${options.interval} * * * *`;
+    const cronArgs = [
+      'cron', 'add',
+      '--name', 'msc-inbox-watcher',
+      '--schedule', cronExpr,
+      '--trigger-file', options.triggerFile,
+      '--description', 'MSC Posteingang beobachten und neue externe Mails melden',
+    ];
+    const command = `openclaw ${cronArgs.join(' ')}`;
+    if (options.dryRun) {
+      output({ dryRun: true, command });
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    try {
+      const result = await execFileAsync('openclaw', cronArgs, { timeout: 30_000 });
+      stdout = result.stdout;
+      stderr = result.stderr;
+    } catch (error: unknown) {
+      const execError = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string };
+      throw new Error(
+        `openclaw cron add fehlgeschlagen: ${
+          execError.stderr?.trim() || execError.stdout?.trim() || execError.message
+        }`,
+      );
+    }
+    output({ registered: true, schedule: cronExpr, triggerFile: options.triggerFile, stdout, stderr });
+  });
+inboxWatcher.command('status')
+  .description('Aktuellen Zustand des Posteingangs-Wächter-Cronjobs anzeigen')
+  .action(async () => {
+    let stdout = '';
+    let stderr = '';
+    try {
+      const result = await execFileAsync('openclaw', ['cron', 'list'], { timeout: 15_000 });
+      stdout = result.stdout;
+      stderr = result.stderr;
+    } catch (error: unknown) {
+      const execError = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string };
+      throw new Error(
+        `openclaw cron list fehlgeschlagen: ${
+          execError.stderr?.trim() || execError.stdout?.trim() || execError.message
+        }`,
+      );
+    }
+    // Filter relevant cron entries
+    let jobs: unknown[] = [];
+    try {
+      const parsed = JSON.parse(stdout) as unknown;
+      jobs = Array.isArray(parsed)
+        ? parsed.filter((item: unknown) =>
+            typeof item === 'object' && item !== null &&
+            (item as Record<string, unknown>)['name'] === 'msc-inbox-watcher')
+        : [];
+    } catch {
+      jobs = [{ raw: stdout }];
+    }
+    output({ jobs, stderr: stderr.trim() || undefined });
+  });
 
 program.exitOverride();
 try {

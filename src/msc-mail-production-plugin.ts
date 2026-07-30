@@ -191,14 +191,15 @@ const displayValue = (value: JsonValue | undefined): string | undefined => {
   return JSON.stringify(value);
 };
 
-const boundedApprovalBody = (body: string, maximum = 2_800): string => {
-  if (body.length <= maximum) return body;
-  const separator = '\n\n… [Mittelteil gekürzt] …\n\n';
-  const available = maximum - separator.length;
-  const startLength = Math.floor(available * 0.72);
-  return `${body.slice(0, startLength).trimEnd()}${separator}${
-    body.slice(-(available - startLength)).trimStart()
-  }`;
+
+/**
+ * Short body snippet for Telegram approval cards.
+ * Keeps only the leading content up to ~280 chars so the card stays readable.
+ */
+const approvalBodySnippet = (body: string, maxChars = 280): string => {
+  const trimmed = body.trim();
+  if (trimmed.length <= maxChars) return trimmed;
+  return `${trimmed.slice(0, maxChars).trimEnd()}…`;
 };
 
 export const createMailApprovalDescription = (
@@ -208,37 +209,29 @@ export const createMailApprovalDescription = (
   const isReply = preview.changes.some(
     (change) => change.field === 'Antwort',
   );
-  const sourceMessage = displayValue(previewValue(preview, 'Quellnachricht'));
+  const account = displayValue(previewValue(
+    preview,
+    isReply ? 'Quellkonto' : 'Absenderkonto',
+  )) ?? preview.target;
+  const to = displayValue(previewValue(preview, 'An')) ?? preview.target;
+  const subject = displayValue(previewValue(preview, 'Betreff')) ?? '—';
   const body = displayValue(previewValue(
     preview,
     isReply ? 'Antwort' : 'Nachricht',
-  ));
+  )) ?? '';
+  const bcc = displayValue(previewValue(preview, 'BCC'));
+  const snippet = approvalBodySnippet(body);
   const lines = [
-    isReply
-      ? 'Diese Antwort genau einmal senden'
-      : 'Diese E-Mail genau einmal senden',
-    `Konto: ${
-      displayValue(previewValue(
-        preview,
-        isReply ? 'Quellkonto' : 'Absenderkonto',
-      )) ?? preview.target
-    }`,
-    ...(sourceMessage ? [`Antwort auf Nachricht: ${sourceMessage}`] : []),
-    `Von: ${displayValue(previewValue(preview, 'Von')) ?? '—'}`,
-    `An: ${displayValue(previewValue(preview, 'An')) ?? preview.target}`,
-    ...(displayValue(previewValue(preview, 'BCC'))
-      ? [`BCC: ${displayValue(previewValue(preview, 'BCC'))}`]
-      : []),
-    `Betreff: ${displayValue(previewValue(preview, 'Betreff')) ?? '—'}`,
+    isReply ? '\u{1F4E8} MSC-Antwort senden' : '\u{1F4E8} MSC-E-Mail senden',
+    `Konto: ${account}`,
+    `An: ${to}`,
+    ...(bcc ? [`BCC: ${bcc}`] : []),
+    `Betreff: ${subject}`,
     '',
-    isReply
-      ? 'Antworttext inkl. Signatur (lange Texte mittig gekürzt):'
-      : 'Nachrichtentext (lange Texte mittig gekürzt):',
-    boundedApprovalBody(body ?? '—'),
+    snippet || '—',
     '',
-    `Prüfreferenz: ${payloadReference}`,
-    'SMTP-Preflight: erfolgreich',
-    'allow-once erlaubt genau diesen einen Versandversuch. Ein unklares Ergebnis wird quarantänisiert und niemals automatisch wiederholt.',
+    `Ref: ${payloadReference} · SMTP-Preflight OK`,
+    'allow-once → genau ein Versandversuch. Unklares Ergebnis wird quarantänisiert.',
   ];
   return lines.join('\n');
 };
