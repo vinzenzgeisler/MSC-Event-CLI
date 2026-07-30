@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import re
 import sys
@@ -14,6 +15,30 @@ CLI = Path("/opt/msc-event-cli/dist/src/cli.js")
 LOOKUP_OPTIONS = {"--orga-code", "--email", "--name", "--codriver-name", "--start-number"}
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.I)
 CLIENT_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+ADMIN_QUERY_OPERATIONS = {
+    "dashboard.summary",
+    "dashboard.driver-locations",
+    "events.list",
+    "events.get",
+    "events.classes",
+    "events.current",
+    "entries.list",
+    "entries.deleted",
+    "entries.get",
+    "entries.checkin",
+    "pricing.get",
+    "invoices.list",
+    "invoices.payments",
+    "exports.list",
+    "exports.get",
+    "mail.outbox",
+    "mail.templates",
+    "mail.template-versions",
+    "mail.template-placeholders",
+    "mail.recipients",
+    "iam.roles",
+    "iam.users",
+}
 
 
 def fail(message: str, code: int = 4) -> None:
@@ -30,7 +55,22 @@ def command_args(argv: list[str]) -> list[str]:
         return argv
     if len(argv) == 3 and argv[:2] == ["detail", "--id"] and UUID.fullmatch(argv[2]):
         return argv
-    fail("allowed commands: health; lookup with one supported key; detail --id UUID")
+    if (
+        len(argv) == 5
+        and argv[0] == "admin-query"
+        and argv[1] == "--operation"
+        and argv[2] in ADMIN_QUERY_OPERATIONS
+        and argv[3] == "--params-json"
+        and len(argv[4].encode("utf-8")) <= 16 * 1024
+    ):
+        try:
+            parameters = json.loads(argv[4])
+        except (json.JSONDecodeError, UnicodeError):
+            fail("invalid admin query parameters")
+        if not isinstance(parameters, dict):
+            fail("admin query parameters must be an object")
+        return argv
+    fail("allowed commands: health; lookup; detail; typed admin-query")
 
 
 def https_base(name: str, value: str) -> str:
@@ -68,7 +108,15 @@ def runtime_env(source: dict[str, str]) -> dict[str, str]:
         "MSC_EVENT_COGNITO_URL": cognito_url,
         "MSC_EVENT_COGNITO_CLIENT_ID": client_id,
         "MSC_EVENT_COGNITO_CLIENT_SECRET_FILE": str(secret_path),
-        "MSC_EVENT_COGNITO_SCOPE": "msc-support/entries.read",
+        "MSC_EVENT_COGNITO_SCOPE": " ".join([
+            "msc-automation/dashboard.read",
+            "msc-automation/entries.read",
+            "msc-automation/entries.payment.read",
+            "msc-automation/communication.read",
+            "msc-automation/exports.read",
+            "msc-automation/settings.read",
+            "msc-automation/iam.read",
+        ]),
         "MSC_EVENT_TIMEOUT_MS": timeout,
     }
 

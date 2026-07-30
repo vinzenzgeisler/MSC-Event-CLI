@@ -318,3 +318,95 @@ test('binds one Telegram operator approval to one exact mail proposal and SMTP a
   );
   assert.equal(smtpCalls, 2);
 });
+
+test('binds one Telegram approval to one stale-state-checked entry mutation', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'msc-event-telegram-'));
+  const sessionKey = 'agent:main:telegram:direct:8261978945';
+  const entryId = '10000000-0000-4000-8000-000000000001';
+  let reads = 0;
+  let writes = 0;
+  const composition = new MscMailProductionComposition({
+    stateDatabasePath: join(directory, 'state.sqlite'),
+    encryptionKey: Buffer.alloc(32, 131),
+    signingKey: Buffer.alloc(32, 132),
+    sessionCsrfKey: Buffer.alloc(32, 133),
+    publicOrigin: 'https://openclaw.example',
+    basePath: '/msc-approval',
+    rpId: 'openclaw.example',
+    reviewerActor: 'vinzenz',
+    operatorSessionKey: sessionKey,
+    trustedProxyAddresses: ['172.20.0.2'],
+    bindAddress: '127.0.0.1',
+    port: 18443,
+    workerIntervalMs: 60_000,
+    workerId: 'production-test',
+    messageIdDomain: 'mail.msc.example',
+    mailPolicy: policy,
+    smtpAccounts: [{
+      account: 'msc-info',
+      host: 'smtp.example.org',
+      port: 465,
+      secure: true,
+      username: 'info@msc.example',
+      password: 'injected',
+      senderIdentity: 'info@msc.example',
+    }],
+    async eventProviderRunner(args) {
+      assert.deepEqual(args, ['detail', '--id', entryId]);
+      reads += 1;
+      return {
+        stdout: JSON.stringify({
+          entryId,
+          acceptanceStatus: writes ? 'accepted' : 'pending',
+          revision: writes,
+        }),
+      };
+    },
+    eventMutationTransport: {
+      async apply(id, operation, context) {
+        writes += 1;
+        assert.equal(id, entryId);
+        assert.equal(operation.type, 'acceptance-status');
+        assert.equal(context.approvedBy, 'vinzenz');
+        return { result: { ok: true } };
+      },
+    },
+  });
+  t.after(async () => composition.close());
+
+  const proposed = await composition.eventProposals!.proposeEventEntryChange({
+    entryId,
+    operation: {
+      type: 'acceptance-status',
+      acceptanceStatus: 'accepted',
+      sendLifecycleMail: false,
+    },
+    idempotencyKey: 'event-entry-accept-1',
+    ttlSeconds: 900,
+  });
+  const preview = await composition.gatewayEventApprovalPreview(
+    proposed.actionId,
+    proposed.payloadReference,
+    sessionKey,
+  );
+  assert.equal(preview.title, 'Nennung ändern');
+  const result = await composition.approveAndExecuteEventFromGateway({
+    actionId: proposed.actionId,
+    payloadReference: proposed.payloadReference,
+    sessionKey,
+    toolCallId: 'tool-event-1',
+  });
+  assert.equal(result.kind, 'event.entry.update');
+  assert.equal(writes, 1);
+  assert.equal(reads, 3);
+  await assert.rejects(
+    composition.approveAndExecuteEventFromGateway({
+      actionId: proposed.actionId,
+      payloadReference: proposed.payloadReference,
+      sessionKey,
+      toolCallId: 'tool-event-2',
+    }),
+    /consumed|pending|approved/,
+  );
+  assert.equal(writes, 1);
+});

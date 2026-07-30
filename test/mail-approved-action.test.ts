@@ -149,6 +149,14 @@ const replyDraft = {
   uncertainties: ['Termin noch manuell prüfen'],
 };
 
+const signature = [
+  'Mit freundlichen Grüßen',
+  'Vinzenz Geisler',
+  'i. A. MSC Oberlausitzer Dreiländereck e. V.',
+  '📞 +49 152 52971212',
+  '🌐 www.msc-oberlausitzer-dreilaendereck.eu',
+].join('\n');
+
 test('binds reply account, source message, sender, recipient and absent thread context', () => {
   const intent = createMailReplyIntent(policy, replyDraft);
   assert.equal(intent.after.account, intent.before.account);
@@ -179,6 +187,90 @@ test('preserves an existing reply prefix and rejects an unapproved source folder
       source: { ...replyDraft.source, folder: 'Sent' },
     }),
     /not allowed/,
+  );
+});
+
+test('adds the verified signature and self-BCC only for MSC Nennung replies', () => {
+  const configuredPolicy: MscMailAccountPolicy = {
+    ...policy,
+    accounts: {
+      ...policy.accounts,
+      'msc-nennung': {
+        ...policy.accounts['msc-nennung'],
+        replySignature: signature,
+        replyBccToSelf: true,
+      },
+      'msc-info': {
+        ...policy.accounts['msc-info'],
+        replySignature: signature,
+        replyBccToSelf: false,
+      },
+    },
+  };
+  const nennung = createMailReplyIntent(configuredPolicy, {
+    ...replyDraft,
+    source: {
+      ...replyDraft.source,
+      account: 'msc-nennung',
+    },
+  });
+  assert.deepEqual(nennung.after.bcc, [
+    'nennung@msc-oberlausitzer-dreilaendereck.eu',
+  ]);
+  assert.equal(
+    nennung.after.bodyText,
+    `${replyDraft.bodyText.trim()}\n\n${signature}`,
+  );
+  const preview = new MailReplyPreviewRenderer().render(nennung);
+  assert.ok(preview.changes.some(
+    (change) => change.field === 'BCC' &&
+      change.after === 'nennung@msc-oberlausitzer-dreilaendereck.eu',
+  ));
+
+  const alreadySigned = createMailReplyIntent(configuredPolicy, {
+    ...replyDraft,
+    source: {
+      ...replyDraft.source,
+      account: 'msc-nennung',
+    },
+    bodyText: `${replyDraft.bodyText.trim()}\n\n${signature}`,
+  });
+  assert.equal(alreadySigned.after.bodyText, nennung.after.bodyText);
+
+  const info = createMailReplyIntent(configuredPolicy, replyDraft);
+  assert.equal(info.after.bcc, undefined);
+  assert.equal(info.after.bodyText, `${replyDraft.bodyText.trim()}\n\n${signature}`);
+});
+
+test('rejects tampering with signature or configured BCC', () => {
+  const configuredPolicy: MscMailAccountPolicy = {
+    ...policy,
+    accounts: {
+      ...policy.accounts,
+      'msc-nennung': {
+        ...policy.accounts['msc-nennung'],
+        replySignature: signature,
+        replyBccToSelf: true,
+      },
+    },
+  };
+  const intent = createMailReplyIntent(configuredPolicy, {
+    ...replyDraft,
+    source: { ...replyDraft.source, account: 'msc-nennung' },
+  });
+  assert.throws(
+    () => parseMailReplyIntent({
+      ...intent,
+      after: { ...intent.after, bcc: ['attacker@example.invalid'] },
+    }),
+    /BCC must match/,
+  );
+  assert.throws(
+    () => parseMailReplyIntent({
+      ...intent,
+      after: { ...intent.after, bodyText: 'Geänderter Text ohne Signatur' },
+    }),
+    /signature/,
   );
 });
 

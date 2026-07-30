@@ -25,6 +25,7 @@ export interface MailTransportEnvelope {
   account: MscMailAccount;
   from: string;
   to: string;
+  bcc?: string[];
   subject: string;
   bodyText: string;
   messageId: string;
@@ -103,6 +104,7 @@ const transportEnvelope = (
       account: intent.after.account,
       from: intent.after.from,
       to: intent.after.to,
+      ...(intent.after.bcc === undefined ? {} : { bcc: intent.after.bcc }),
       subject: intent.after.subject,
       bodyText: intent.after.bodyText,
       messageId: deterministicMessageId(

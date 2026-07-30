@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { CliError, EXIT } from './errors.js';
 import {
+  buildAdminQueryPath,
+  isAdminQueryPath,
+  type AdminQueryOperation,
+  type AdminQueryParameters
+} from './admin-query.js';
+import {
   CurrentEventResponseSchema,
   EntriesResponseSchema,
   EntryDetailResponseSchema,
@@ -16,6 +22,7 @@ export const isAllowedRequest = (method: string, url: URL, basePath = ''): boole
   const prefix = basePath === '/' ? '' : basePath.replace(/\/$/, '');
   if (prefix && url.pathname !== prefix && !url.pathname.startsWith(`${prefix}/`)) return false;
   const routePath = url.pathname.slice(prefix.length) || '/';
+  if (isAdminQueryPath(`${routePath}${url.search}`)) return true;
   if (routePath === '/health' || routePath === '/admin/events/current') return url.search === '';
   if (routePath === '/admin/entries') {
     const keys = [...url.searchParams.keys()];
@@ -39,7 +46,15 @@ export const isAllowedRequest = (method: string, url: URL, basePath = ''): boole
 const parseJson = async <T>(response: Response, schema: z.ZodType<T>): Promise<T> => {
   let value: unknown;
   try {
-    value = await response.json();
+    const declaredLength = Number(response.headers.get('content-length') ?? '0');
+    if (Number.isFinite(declaredLength) && declaredLength > 2 * 1024 * 1024) {
+      throw new Error('response too large');
+    }
+    const body = await response.text();
+    if (Buffer.byteLength(body, 'utf8') > 2 * 1024 * 1024) {
+      throw new Error('response too large');
+    }
+    value = JSON.parse(body) as unknown;
   } catch {
     throw new CliError('INVALID_API_RESPONSE', 'MSC Event API returned invalid JSON.', EXIT.api);
   }
@@ -132,5 +147,16 @@ export class MscEventApi {
       throw new CliError('INVALID_ENTRY_ID', 'Entry ID must be a UUID.', EXIT.usage);
     }
     return this.#get(`/admin/entries/${entryId}`, EntryDetailResponseSchema, true);
+  }
+
+  adminQuery(
+    operation: AdminQueryOperation,
+    parameters: AdminQueryParameters = {},
+  ): Promise<Record<string, unknown>> {
+    return this.#get(
+      buildAdminQueryPath(operation, parameters),
+      z.record(z.unknown()),
+      true,
+    );
   }
 }

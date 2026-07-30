@@ -190,11 +190,14 @@ test('creates a proposal from the exact read-only source returned by the provide
       provider: 'himalaya',
       operation: 'preview',
       source: { mailbox: 'MSC Info', account: 'msc-info', folder: 'INBOX' },
-      data: {
-        id: 44,
-        from: { addr: 'driver@example.org' },
-        subject: 'Rückfrage',
-      },
+      data: [
+        'Message-ID: <provider-message@example.org>',
+        'From: Fahrer <driver@example.org>',
+        'To: info@msc-oberlausitzer-dreilaendereck.eu',
+        'Subject: Rückfrage',
+        '',
+        'Untrusted message body.',
+      ].join('\r\n'),
     }),
   }));
   const flow = new MscMailFlow({

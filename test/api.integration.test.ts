@@ -204,13 +204,14 @@ test('full detail is opt-in and preserves sensitive backend fields and history',
   assert.deepEqual(full.history, [{ payload: 'hidden' }]);
 });
 
-test('allowlist rejects methods, paths and unexpected query keys', () => {
+test('allowlist supports typed filters while rejecting methods and unexpected query keys', () => {
   assert.equal(isAllowedRequest('POST', new URL('/health', baseUrl)), false);
   assert.equal(isAllowedRequest('GET', new URL('/admin/entries/deleted', baseUrl)), false);
-  assert.equal(isAllowedRequest('GET', new URL(`/admin/entries?eventId=${eventId}&q=x&paymentStatus=due`, baseUrl)), false);
+  assert.equal(isAllowedRequest('GET', new URL(`/admin/entries?eventId=${eventId}&q=x&paymentStatus=due`, baseUrl)), true);
+  assert.equal(isAllowedRequest('GET', new URL(`/admin/entries?eventId=${eventId}&url=https://evil.example`, baseUrl)), false);
   assert.equal(isAllowedRequest('GET', new URL(`/admin/entries?eventId=${eventId}&limit=100&sortBy=createdAt&sortDir=asc`, baseUrl)), true);
-  assert.equal(isAllowedRequest('GET', new URL(`/admin/entries?eventId=${eventId}&limit=100`, baseUrl)), false);
-  assert.equal(isAllowedRequest('GET', new URL(`/admin/entries?eventId=${eventId}&limit=100&sortBy=createdAt&sortDir=desc`, baseUrl)), false);
+  assert.equal(isAllowedRequest('GET', new URL(`/admin/entries?eventId=${eventId}&limit=100`, baseUrl)), true);
+  assert.equal(isAllowedRequest('GET', new URL(`/admin/entries?eventId=${eventId}&limit=100&sortBy=createdAt&sortDir=desc`, baseUrl)), true);
   assert.equal(isAllowedRequest('GET', new URL('/prod/health', baseUrl), '/prod'), true);
 });
 

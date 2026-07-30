@@ -2,7 +2,7 @@ import { registerMscMailProductionPlugin } from '../dist/src/msc-mail-production
 
 export default {
   id: 'msc-approved-mail',
-  name: 'MSC Approved Mail',
-  description: 'Operator-approved MSC mail replies with encrypted state and exact-once dispatch.',
+  name: 'MSC Operations',
+  description: 'Typed MSC reads and approval-gated registration and mail operations.',
   register: registerMscMailProductionPlugin,
 };

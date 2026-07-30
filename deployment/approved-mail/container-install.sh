@@ -168,6 +168,13 @@ const identities = {
   'msc-info': ['info@msc-oberlausitzer-dreilaendereck.eu', 'MSC Info'],
   'msc-vorstand': ['admin@msc-oberlausitzer-dreilaendereck.eu', 'MSC Vorstand'],
 };
+const replySignature = [
+  'Mit freundlichen Grüßen',
+  'Vinzenz Geisler',
+  'i. A. MSC Oberlausitzer Dreiländereck e. V.',
+  '📞 +49 152 52971212',
+  '🌐 www.msc-oberlausitzer-dreilaendereck.eu',
+].join('\n');
 const accounts = {};
 const smtpAccounts = [];
 for (const [account, [senderIdentity, displayName]] of Object.entries(identities)) {
@@ -176,6 +183,8 @@ for (const [account, [senderIdentity, displayName]] of Object.entries(identities
     senderIdentity,
     displayName,
     allowedFolders: ['INBOX'],
+    replySignature,
+    replyBccToSelf: account === 'msc-nennung',
   };
   smtpAccounts.push({
     account,

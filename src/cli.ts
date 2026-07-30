@@ -5,6 +5,10 @@ import { loadAccessToken } from './auth.js';
 import { loadRuntimeConfig } from './config.js';
 import { CliError, EXIT, safeError } from './errors.js';
 import { parseSearchSpec } from './lookup.js';
+import {
+  adminQueryOperationSchema,
+  type AdminQueryParameters,
+} from './admin-query.js';
 import { parseFormat, renderOutput, type OutputFormat } from './output.js';
 import { SupportService } from './service.js';
 
@@ -43,6 +47,23 @@ common(program.command('lookup').description('Find registrations in the current 
     write(result, options.format);
     if (result.status === 'not_found') process.exitCode = EXIT.notFound;
     if (result.status === 'ambiguous') process.exitCode = EXIT.ambiguous;
+  });
+
+common(program.command('admin-query').description('Run a typed read-only admin query'))
+  .requiredOption('--operation <name>')
+  .option('--params-json <json>', 'Typed query parameters', '{}')
+  .action(async (options) => {
+    let parameters: AdminQueryParameters;
+    try {
+      parameters = JSON.parse(options.paramsJson) as AdminQueryParameters;
+    } catch {
+      throw new CliError('INVALID_ADMIN_QUERY', 'Admin query parameters must be valid JSON.', EXIT.usage);
+    }
+    const runtime = await service(options, true);
+    write(await runtime.adminQuery(
+      adminQueryOperationSchema.parse(options.operation),
+      parameters,
+    ), options.format);
   });
 
 common(program.command('detail').description('Show one registration detail'))

@@ -46,7 +46,7 @@ class ContainerInstallTests(unittest.TestCase):
         self.assertIn("agent:main:telegram:direct:8261978945", source)
         self.assertIn('rmdir -- "$STAGING_ROOT"', source)
 
-    def test_native_plugin_manifest_declares_both_optional_tools(self) -> None:
+    def test_native_plugin_manifest_declares_all_optional_tools(self) -> None:
         manifest = json.loads(
             Path(
                 __file__,
@@ -56,10 +56,30 @@ class ContainerInstallTests(unittest.TestCase):
         )
         self.assertEqual(
             manifest["contracts"]["tools"],
-            ["msc_mail_reply_propose", "msc_mail_reply_send"],
+            [
+                "msc_mail_watch_list",
+                "msc_mail_reply_propose",
+                "msc_mail_reply_send",
+                "msc_event_entry_change_propose",
+                "msc_event_entry_change_execute",
+            ],
         )
+        self.assertTrue(manifest["toolMetadata"]["msc_mail_watch_list"]["optional"])
         self.assertTrue(manifest["toolMetadata"]["msc_mail_reply_propose"]["optional"])
         self.assertTrue(manifest["toolMetadata"]["msc_mail_reply_send"]["optional"])
+        self.assertTrue(
+            manifest["toolMetadata"]["msc_event_entry_change_propose"]["optional"]
+        )
+        self.assertTrue(
+            manifest["toolMetadata"]["msc_event_entry_change_execute"]["optional"]
+        )
+
+    def test_installer_binds_signature_and_nennung_bcc_policy(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("Mit freundlichen Grüßen", source)
+        self.assertIn("Vinzenz Geisler", source)
+        self.assertIn("replySignature", source)
+        self.assertIn("replyBccToSelf: account === 'msc-nennung'", source)
 
     def test_private_file_check_rejects_world_readable_mode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

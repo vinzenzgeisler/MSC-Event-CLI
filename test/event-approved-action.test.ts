@@ -36,6 +36,39 @@ test('binds one typed Nennung change to its exact current snapshot', () => {
   ));
 });
 
+test('covers the documented entry mutation set with strict typed payloads', () => {
+  const operations = [
+    { type: 'payment-status', paymentStatus: 'paid' },
+    { type: 'technical-status', techStatus: 'passed' },
+    { type: 'checkin-id-verification', checkinIdVerified: true },
+    { type: 'notes', inspectionNote: 'Abnahme geprüft' },
+    {
+      type: 'class',
+      classId: '30000000-0000-4000-8000-000000000003',
+      applyToBackupVehicle: true,
+      allowVehicleTypeChange: false,
+    },
+    { type: 'soft-delete' },
+    { type: 'restore' },
+  ] as const;
+  for (const operation of operations) {
+    const intent = createEventEntryChangeIntent({
+      entryId,
+      currentSnapshot: { revision: 'before' },
+      operation,
+    });
+    assert.equal(intent.after.operation.type, operation.type);
+  }
+  assert.throws(() => createEventEntryChangeIntent({
+    entryId,
+    currentSnapshot: { revision: 'before' },
+    operation: {
+      type: 'soft-delete',
+      arbitrary: true,
+    } as never,
+  }));
+});
+
 test('rejects hidden fields, target substitution and lifecycle mail side effects', () => {
   const intent = createEventEntryChangeIntent({
     entryId,
@@ -110,7 +143,10 @@ test('reads current state before applying the approved typed mutation', async ()
     approvedAt: '2026-07-25T22:50:00.000Z',
   };
   assert.deepEqual(await adapter.execute(intent, context), {
-    result: { ok: true },
+    result: {
+      mutation: { ok: true },
+      verifiedSnapshot: snapshot,
+    },
   });
   assert.deepEqual(applied, [{
     id: entryId,
