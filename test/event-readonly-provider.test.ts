@@ -10,11 +10,13 @@ test('uses only the fixed event read-only command contract', async () => {
   });
   await provider.health();
   await provider.lookup('email', 'driver@example.org');
+  await provider.lookup('codriver-name', 'Max Mustermann');
   await provider.lookup('orga-code', 'ABC-123');
   await provider.detail('10000000-0000-4000-8000-000000000001');
   assert.deepEqual(calls, [
     ['health'],
     ['lookup', '--email', 'driver@example.org'],
+    ['lookup', '--codriver-name', 'Max Mustermann'],
     ['lookup', '--orga-code', 'ABC-123'],
     ['detail', '--id', '10000000-0000-4000-8000-000000000001'],
   ]);

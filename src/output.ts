@@ -17,6 +17,18 @@ export const renderOutput = (value: unknown, format: OutputFormat): string => {
     const candidates = (record.candidates as Array<Record<string, unknown>> | undefined) ?? [];
     return ['Mehrdeutiger Treffer:', ...candidates.map((item) => `- ${item.name ?? 'Unbekannt'} · ${item.orgaCode ?? 'ohne Orga-Code'}`)].join('\n');
   }
+  const matches = record.matches as Array<Record<string, unknown>> | undefined;
+  if (matches?.length) {
+    return matches.map((item) => {
+      const driver = item.driver as Record<string, unknown>;
+      const start = item.start as Record<string, unknown>;
+      return [
+        `${driver.firstName ?? ''} ${driver.lastName ?? ''}`.trim(),
+        `${start.className ?? ''} · Start ${start.startNumber ?? '—'} · ${start.vehicle ?? ''}`,
+        `Telefon: ${driver.phone ?? '—'} · E-Mail: ${driver.email ?? '—'}`,
+      ].join('\n');
+    }).join('\n\n');
+  }
   const entries = (record.entries as Array<Record<string, unknown>> | undefined) ?? (record.entry ? [record.entry as Record<string, unknown>] : []);
   if (entries.length > 0) {
     return entries.map((item) => {

@@ -1,7 +1,8 @@
 # OpenClaw deployment
 
 This package exposes the CLI to OpenClaw through `/usr/local/bin/msc-event-readonly`.
-The wrapper permits only compact read operations and rejects `--full`, custom
+The wrapper permits only compact read operations, including exact
+`--codriver-name` lookup, and rejects `--full`, custom
 base URLs, legacy bearer tokens and every command outside its fixed allowlist.
 
 ## Production values

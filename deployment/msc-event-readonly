@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 NODE = Path("/usr/local/bin/node")
 CLI = Path("/opt/msc-event-cli/dist/src/cli.js")
-LOOKUP_OPTIONS = {"--orga-code", "--email", "--name", "--start-number"}
+LOOKUP_OPTIONS = {"--orga-code", "--email", "--name", "--codriver-name", "--start-number"}
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.I)
 CLIENT_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 

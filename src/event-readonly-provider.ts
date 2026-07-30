@@ -9,6 +9,7 @@ const lookupValueSchema = z.string().trim().min(1).max(320)
 const lookupKindSchema = z.enum([
   'email',
   'name',
+  'codriver-name',
   'orga-code',
   'start-number',
 ]);

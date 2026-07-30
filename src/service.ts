@@ -1,6 +1,15 @@
 import { MscEventApi } from './api.js';
-import { exactMatch, groupByDriver, type SearchSpec } from './lookup.js';
-import { ambiguousCandidate, compactEntry } from './project.js';
+import {
+  exactMatch,
+  exactPersonName,
+  groupByDriver,
+  type SearchSpec,
+} from './lookup.js';
+import {
+  ambiguousCandidate,
+  compactCodriverMatch,
+  compactEntry,
+} from './project.js';
 import type { EntryListItem } from './schemas.js';
 
 export class SupportService {
@@ -18,6 +27,12 @@ export class SupportService {
   }
 
   async lookup(spec: SearchSpec, full = false) {
+    if (spec.kind === 'codriverName') {
+      if (full) {
+        throw new Error('full mode is not available for codriver lookup');
+      }
+      return this.lookupCodriver(spec);
+    }
     const current = await this.api.currentEvent();
     const listedEntries: EntryListItem[] = [];
     let cursor: string | undefined;
@@ -57,6 +72,41 @@ export class SupportService {
       event: current.event,
       driver: ambiguousCandidate(group.entries[0]!),
       entries: detailedEntries
+    };
+  }
+
+  private async lookupCodriver(spec: SearchSpec) {
+    const current = await this.api.currentEvent();
+    const listedEntries: EntryListItem[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 100; page += 1) {
+      const result = await this.api.listEntries(current.event.id, cursor);
+      listedEntries.push(...result.entries);
+      const next = result.meta.hasMore
+        ? result.meta.nextCursor ?? undefined
+        : undefined;
+      if (!next) break;
+      cursor = next;
+    }
+
+    const matches = [];
+    for (const item of listedEntries) {
+      const response = await this.api.entryDetail(item.id);
+      const codriver = response.entry.person.codriver;
+      if (exactPersonName(codriver?.firstName, codriver?.lastName, spec.value)) {
+        matches.push(compactCodriverMatch(response));
+      }
+    }
+
+    if (matches.length === 0) {
+      return { status: 'not_found' as const, query: spec, event: current.event };
+    }
+    return {
+      status: 'matched' as const,
+      mode: 'compact' as const,
+      query: spec,
+      event: current.event,
+      matches,
     };
   }
 }

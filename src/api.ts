@@ -19,8 +19,18 @@ export const isAllowedRequest = (method: string, url: URL, basePath = ''): boole
   if (routePath === '/health' || routePath === '/admin/events/current') return url.search === '';
   if (routePath === '/admin/entries') {
     const keys = [...url.searchParams.keys()];
-    return keys.every((key) => ['eventId', 'q', 'limit', 'cursor'].includes(key)) &&
-      UUID.test(url.searchParams.get('eventId') ?? '') && Boolean(url.searchParams.get('q'));
+    const validEvent = UUID.test(url.searchParams.get('eventId') ?? '');
+    const query = url.searchParams.get('q');
+    if (query) {
+      return validEvent &&
+        keys.every((key) => ['eventId', 'q', 'limit', 'cursor'].includes(key));
+    }
+    return validEvent &&
+      keys.every((key) =>
+        ['eventId', 'limit', 'cursor', 'sortBy', 'sortDir'].includes(key)) &&
+      url.searchParams.get('limit') === '100' &&
+      url.searchParams.get('sortBy') === 'createdAt' &&
+      url.searchParams.get('sortDir') === 'asc';
   }
   const match = routePath.match(/^\/admin\/entries\/([^/]+)$/);
   return Boolean(match?.[1] && UUID.test(match[1]) && url.search === '');
@@ -102,6 +112,17 @@ export class MscEventApi {
 
   searchEntries(eventId: string, query: string, cursor?: string) {
     const params = new URLSearchParams({ eventId, q: query, limit: '100' });
+    if (cursor) params.set('cursor', cursor);
+    return this.#get(`/admin/entries?${params.toString()}`, EntriesResponseSchema, true);
+  }
+
+  listEntries(eventId: string, cursor?: string) {
+    const params = new URLSearchParams({
+      eventId,
+      limit: '100',
+      sortBy: 'createdAt',
+      sortDir: 'asc',
+    });
     if (cursor) params.set('cursor', cursor);
     return this.#get(`/admin/entries?${params.toString()}`, EntriesResponseSchema, true);
   }

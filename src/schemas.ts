@@ -34,7 +34,18 @@ export const EntriesResponseSchema = z.object({
 });
 
 const NullableString = z.string().nullable().optional();
-const PersonSchema = z.object({ firstName: NullableString, lastName: NullableString, email: NullableString }).passthrough();
+const PersonSchema = z.object({
+  firstName: NullableString,
+  lastName: NullableString,
+  email: NullableString,
+  phone: NullableString,
+}).passthrough();
+
+const CodriverSchema = z.object({
+  firstName: NullableString,
+  lastName: NullableString,
+  email: NullableString,
+}).passthrough();
 
 export const EntryDetailResponseSchema = z.object({
   ok: z.boolean(),
@@ -54,7 +65,10 @@ export const EntryDetailResponseSchema = z.object({
     vehicleLabel: NullableString,
     confirmationMailSent: z.boolean().optional(),
     confirmationMailVerified: z.boolean().optional(),
-    person: z.object({ driver: PersonSchema }).passthrough(),
+    person: z.object({
+      driver: PersonSchema,
+      codriver: CodriverSchema.nullable().optional(),
+    }).passthrough(),
     vehicle: z.object({ make: NullableString, model: NullableString }).passthrough(),
     payment: z.object({
       totalCents: z.number().int(),

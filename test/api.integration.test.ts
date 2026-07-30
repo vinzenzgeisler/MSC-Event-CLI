@@ -105,7 +105,87 @@ test('one driver with two exact matches is returned as one matched double starte
   };
   const result = await new SupportService(fakeApi as never).lookup({ kind: 'orgaCode', value: 'double' });
   assert.equal(result.status, 'matched');
-  if (result.status === 'matched') assert.equal(result.entries.length, 2);
+  if (result.status === 'matched' && 'entries' in result) {
+    assert.equal(result.entries.length, 2);
+  }
+});
+
+test('codriver lookup lists every registration and returns exact matches only', async () => {
+  const secondId = '10000000-0000-4000-8000-000000000002';
+  const listItem = {
+    eventId,
+    classId: '30000000-0000-4000-8000-000000000003',
+    driverPersonId: '40000000-0000-4000-8000-000000000004',
+    className: 'Classic',
+    registrationStatus: 'submitted_verified',
+    acceptanceStatus: 'accepted',
+    startNumberNorm: '42',
+    orgaCode: 'CODE',
+    driverFirstName: 'Max',
+    driverLastName: 'Musterfahrer',
+    driverEmail: 'max@example.org',
+  };
+  const first = detailFixture(entryId);
+  first.entry.person.codriver = {
+    firstName: 'Max',
+    lastName: 'Mustermann',
+    email: 'placeholder@example.org',
+  };
+  const second = detailFixture(secondId);
+  second.entry.person.codriver = {
+    firstName: 'Erika',
+    lastName: 'Beifahrerin',
+    email: 'erika@example.org',
+  };
+  const fakeApi = {
+    currentEvent: async () => ({
+      ok: true,
+      event: { id: eventId, name: 'Event', status: 'open' },
+    }),
+    listEntries: async () => ({
+      ok: true,
+      entries: [
+        { ...listItem, id: entryId },
+        { ...listItem, id: secondId },
+      ],
+      meta: { hasMore: false },
+    }),
+    entryDetail: async (id: string) => id === entryId ? first : second,
+  };
+
+  const result = await new SupportService(fakeApi as never).lookup({
+    kind: 'codriverName',
+    value: ' max   mustermann ',
+  });
+  assert.equal(result.status, 'matched');
+  if (result.status === 'matched' && 'matches' in result) {
+    assert.equal(result.matches.length, 1);
+    assert.equal(result.matches[0]?.entryId, entryId);
+    assert.equal(result.matches[0]?.driver.email, 'max@example.org');
+    assert.equal(result.matches[0]?.codriver.firstName, 'Max');
+  }
+});
+
+test('codriver lookup returns not_found when no detail matches', async () => {
+  const fakeApi = {
+    currentEvent: async () => ({
+      ok: true,
+      event: { id: eventId, name: 'Event', status: 'open' },
+    }),
+    listEntries: async () => ({
+      ok: true,
+      entries: [],
+      meta: { hasMore: false },
+    }),
+    entryDetail: async () => {
+      throw new Error('must not fetch');
+    },
+  };
+  const result = await new SupportService(fakeApi as never).lookup({
+    kind: 'codriverName',
+    value: 'Max Mustermann',
+  });
+  assert.equal(result.status, 'not_found');
 });
 
 test('full detail is opt-in and preserves sensitive backend fields and history', async () => {
@@ -128,6 +208,9 @@ test('allowlist rejects methods, paths and unexpected query keys', () => {
   assert.equal(isAllowedRequest('POST', new URL('/health', baseUrl)), false);
   assert.equal(isAllowedRequest('GET', new URL('/admin/entries/deleted', baseUrl)), false);
   assert.equal(isAllowedRequest('GET', new URL(`/admin/entries?eventId=${eventId}&q=x&paymentStatus=due`, baseUrl)), false);
+  assert.equal(isAllowedRequest('GET', new URL(`/admin/entries?eventId=${eventId}&limit=100&sortBy=createdAt&sortDir=asc`, baseUrl)), true);
+  assert.equal(isAllowedRequest('GET', new URL(`/admin/entries?eventId=${eventId}&limit=100`, baseUrl)), false);
+  assert.equal(isAllowedRequest('GET', new URL(`/admin/entries?eventId=${eventId}&limit=100&sortBy=createdAt&sortDir=desc`, baseUrl)), false);
   assert.equal(isAllowedRequest('GET', new URL('/prod/health', baseUrl), '/prod'), true);
 });
 
