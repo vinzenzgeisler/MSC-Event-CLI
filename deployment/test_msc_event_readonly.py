@@ -25,6 +25,16 @@ class WrapperTests(unittest.TestCase):
             MODULE.command_args(["detail", "--id", "00000000-0000-4000-8000-000000000000"])[0],
             "detail",
         )
+        self.assertEqual(
+            MODULE.command_args([
+                "admin-query",
+                "--operation",
+                "entries.list",
+                "--params-json",
+                '{"eventId":"00000000-0000-4000-8000-000000000000"}',
+            ])[0],
+            "admin-query",
+        )
 
     def test_rejects_full_arbitrary_and_write_like_commands(self):
         rejected = [
@@ -33,6 +43,9 @@ class WrapperTests(unittest.TestCase):
             ["delete", "--id", "00000000-0000-4000-8000-000000000000"],
             ["lookup", "--base-url", "https://evil.example"],
             ["lookup", "--name", "line\nbreak"],
+            ["admin-query", "--operation", "arbitrary.http", "--params-json", "{}"],
+            ["admin-query", "--operation", "entries.list", "--params-json", "[]"],
+            ["admin-query", "--operation", "entries.list", "--params-json", "{broken"],
         ]
         for argv in rejected:
             with self.subTest(argv=argv), self.assertRaises(SystemExit):

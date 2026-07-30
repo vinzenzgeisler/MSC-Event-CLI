@@ -1,6 +1,11 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
+import {
+  adminQueryOperationSchema,
+  type AdminQueryOperation,
+  type AdminQueryParameters,
+} from './admin-query.js';
 
 const execFileAsync = promisify(execFile);
 const uuidSchema = z.string().uuid();
@@ -51,6 +56,24 @@ export class MscEventReadonlyProvider {
   detail(idValue: string): Promise<unknown> {
     const id = uuidSchema.parse(idValue);
     return this.invoke(['detail', '--id', id]);
+  }
+
+  query(
+    operationValue: AdminQueryOperation,
+    parameters: AdminQueryParameters = {},
+  ): Promise<unknown> {
+    const operation = adminQueryOperationSchema.parse(operationValue);
+    const parametersJson = JSON.stringify(z.record(z.unknown()).parse(parameters));
+    if (Buffer.byteLength(parametersJson, 'utf8') > 16 * 1024) {
+      throw new Error('admin query parameters exceed 16 KiB');
+    }
+    return this.invoke([
+      'admin-query',
+      '--operation',
+      operation,
+      '--params-json',
+      parametersJson,
+    ]);
   }
 
   private async invoke(args: string[]): Promise<unknown> {

@@ -11,12 +11,23 @@ import {
   compactEntry,
 } from './project.js';
 import type { EntryListItem } from './schemas.js';
+import type {
+  AdminQueryOperation,
+  AdminQueryParameters,
+} from './admin-query.js';
 
 export class SupportService {
   constructor(private readonly api: MscEventApi) {}
 
   health() {
     return this.api.health();
+  }
+
+  adminQuery(
+    operation: AdminQueryOperation,
+    parameters: AdminQueryParameters = {},
+  ) {
+    return this.api.adminQuery(operation, parameters);
   }
 
   async detail(entryId: string, full = false) {

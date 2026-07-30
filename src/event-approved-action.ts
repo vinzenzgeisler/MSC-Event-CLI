@@ -30,18 +30,41 @@ const operationSchema = z.union([
     'totalCents or paidAmountCents is required',
   ),
   z.object({
+    type: z.literal('payment-status'),
+    paymentStatus: z.literal('paid'),
+    paidAt: z.string().datetime().optional(),
+    note: z.string().trim().max(1_000).optional(),
+  }).strict(),
+  z.object({
+    type: z.literal('technical-status'),
+    techStatus: z.enum(['pending', 'passed', 'failed']),
+  }).strict(),
+  z.object({
+    type: z.literal('checkin-id-verification'),
+    checkinIdVerified: z.boolean(),
+  }).strict(),
+  z.object({
     type: z.literal('notes'),
     internalNote: z.string().max(2_000).nullable().optional(),
     driverNote: z.string().max(2_000).nullable().optional(),
+    inspectionNote: z.string().max(2_000).nullable().optional(),
   }).strict().refine(
     (value) => value.internalNote !== undefined ||
-      value.driverNote !== undefined,
-    'internalNote or driverNote is required',
+      value.driverNote !== undefined ||
+      value.inspectionNote !== undefined,
+    'at least one note is required',
   ),
   z.object({
     type: z.literal('class'),
     classId: z.string().uuid(),
-    mirrorLinkedBackup: z.boolean(),
+    applyToBackupVehicle: z.boolean(),
+    allowVehicleTypeChange: z.boolean(),
+  }).strict(),
+  z.object({
+    type: z.literal('soft-delete'),
+  }).strict(),
+  z.object({
+    type: z.literal('restore'),
   }).strict(),
 ]);
 

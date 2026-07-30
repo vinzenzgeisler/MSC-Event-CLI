@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { Command, CommanderError, Option } from 'commander';
 import { MscEventReadonlyProvider } from './event-readonly-provider.js';
+import {
+  adminQueryOperationSchema,
+  type AdminQueryParameters,
+} from './admin-query.js';
 import type { EventEntryOperation } from './event-approved-action.js';
 import { runMailFlowDemo } from './mail-flow-demo-cli.js';
 import {
@@ -94,6 +98,22 @@ nennung.command('detail')
   .description('Eine Nennung anzeigen')
   .requiredOption('--id <uuid>')
   .action(async (options: { id: string }) => output(await event.detail(options.id)));
+nennung.command('query')
+  .description('Typisierte, rein lesende Admin-Abfrage ausführen')
+  .requiredOption('--operation <name>')
+  .option('--params-json <json>', 'Abfrageparameter als JSON-Objekt', '{}')
+  .action(async (options: { operation: string; paramsJson: string }) => {
+    let parameters: AdminQueryParameters;
+    try {
+      parameters = JSON.parse(options.paramsJson) as AdminQueryParameters;
+    } catch {
+      throw new Error('params-json muss ein gültiges JSON-Objekt sein');
+    }
+    output(await event.query(
+      adminQueryOperationSchema.parse(options.operation),
+      parameters,
+    ));
+  });
 nennung.command('change')
   .description('Schreibende Änderung als persistierte Freigabe vorbereiten')
   .requiredOption('--config <absolute-path>')
