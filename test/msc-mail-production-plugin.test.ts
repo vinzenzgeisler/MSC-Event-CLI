@@ -138,14 +138,12 @@ test('renders a clear approval with BCC, exact body and signature', () => {
     ],
   }, 'abcdef012345');
 
-  assert.match(description, /MSC-Antwort senden/);
-  assert.match(description, /Konto: msc-nennung/);
+  assert.match(description, /^Diese Antwort genau einmal senden/);
   assert.match(description, /BCC: nennung@msc\.example/);
-  assert.match(description, /An: driver@example\.org/);
-  assert.match(description, /Betreff: Re: Frage/);
-  assert.match(description, /Mit freundlichen Grüßen/);
-  assert.match(description, /SMTP-Preflight OK/);
-  assert.match(description, /quarantänisiert/);
+  assert.match(description, /Antworttext inkl\. Signatur/);
+  assert.match(description, /Mit freundlichen Grüßen\nVinzenz Geisler/);
+  assert.match(description, /SMTP-Preflight: erfolgreich/);
+  assert.match(description, /niemals automatisch wiederholt/);
 });
 
 test('fails closed before service startup for HTTP and proposal execution', async () => {

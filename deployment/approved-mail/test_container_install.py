@@ -81,6 +81,13 @@ class ContainerInstallTests(unittest.TestCase):
         self.assertIn("replySignature", source)
         self.assertIn("replyBccToSelf: account === 'msc-nennung'", source)
 
+    def test_installer_binds_signature_and_nennung_bcc_policy(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("Mit freundlichen Grüßen", source)
+        self.assertIn("Vinzenz Geisler", source)
+        self.assertIn("replySignature", source)
+        self.assertIn("replyBccToSelf: account === 'msc-nennung'", source)
+
     def test_private_file_check_rejects_world_readable_mode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             private_file = Path(directory, "secret")
