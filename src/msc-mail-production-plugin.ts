@@ -233,7 +233,7 @@ export const createMailApprovalDescription = (
     `Ref: ${payloadReference} · SMTP-Preflight OK`,
     'allow-once → genau ein Versandversuch. Unklares Ergebnis wird quarantänisiert.',
   ];
-  return lines.join('\n');
+  return lines.join('\n').slice(0, 511);
 };
 
 const defaultConfigPath = (): string => join(
