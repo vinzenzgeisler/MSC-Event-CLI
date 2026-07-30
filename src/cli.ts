@@ -34,9 +34,10 @@ common(program.command('lookup').description('Find registrations in the current 
   .option('--orga-code <code>')
   .option('--email <email>')
   .option('--name <name>')
+  .option('--codriver-name <name>')
   .option('--start-number <number>')
   .option('--full', 'include all detail fields returned by the backend', false)
-  .action(async (options: CommonOptions & { orgaCode?: string; email?: string; name?: string; startNumber?: string; full: boolean }) => {
+  .action(async (options: CommonOptions & { orgaCode?: string; email?: string; name?: string; codriverName?: string; startNumber?: string; full: boolean }) => {
     const spec = parseSearchSpec(options);
     const result = await (await service(options, true)).lookup(spec, options.full);
     write(result, options.format);

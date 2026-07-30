@@ -25,7 +25,12 @@ export const detailFixture = (entryId = '10000000-0000-4000-8000-000000000001'):
         email: 'max@example.org',
         street: 'Must not leave the API client',
         phone: 'Must not leave the API client'
-      }
+      },
+      codriver: {
+        firstName: 'Erika',
+        lastName: 'Beifahrerin',
+        email: 'erika@example.org',
+      },
     },
     vehicle: { make: 'KTM', model: 'EXC', ownerName: 'Sensitive owner' },
     payment: { totalCents: 10000, paidAmountCents: 2000, amountOpenCents: 8000, paymentStatus: 'due' },

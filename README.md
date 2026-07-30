@@ -17,6 +17,7 @@ node dist/src/cli.js lookup --orga-code 11OLD-7K4P9
 
 node dist/src/cli.js lookup --email max@example.org --format text
 node dist/src/cli.js lookup --name "Max Musterfahrer"
+node dist/src/cli.js lookup --codriver-name "Max Mustermann"
 node dist/src/cli.js lookup --start-number 42
 node dist/src/cli.js detail --id 00000000-0000-4000-8000-000000000000
 node dist/src/cli.js detail --id 00000000-0000-4000-8000-000000000000 --full
@@ -25,11 +26,12 @@ node dist/src/cli.js health
 
 # Gemeinsame Oberfläche
 node dist/src/msc-ops-cli.js nennung lookup --orga-code 11OLD-7K4P9
+node dist/src/msc-ops-cli.js nennung lookup --codriver-name "Max Mustermann"
 node dist/src/msc-ops-cli.js mail read \
   --account msc-info --folder INBOX --message-id 7
 ```
 
-Exactly one lookup option is required. Orga code, e-mail and start number are matched exactly after the API search. Names are matched case-insensitively after whitespace normalization. Multiple registrations belonging to one driver are returned together; multiple drivers produce `ambiguous`.
+Exactly one lookup option is required. Orga code, e-mail and start number are matched exactly after the API search. Driver and codriver names are matched case-insensitively after whitespace normalization. A codriver lookup scans the current event read-only and returns every matching registration with the driver's minimal contact data.
 
 ## Configuration
 
@@ -61,9 +63,10 @@ The HTTP client has no generic request entry point. It permits only:
 - `GET /health`
 - `GET /admin/events/current`
 - `GET /admin/entries?eventId=…&q=…`
+- `GET /admin/entries?eventId=…&limit=100&sortBy=createdAt&sortDir=asc`
 - `GET /admin/entries/:id`
 
-Redirects and every non-GET method are blocked. Compact output intentionally excludes addresses, phone numbers, birth dates, notes, history, document downloads and image URLs. `--full` explicitly returns every field present in the existing detail response, including personal data, notes and history. Use it only for authorized support purposes and avoid copying its output into tickets, chats or logs. The CLI has no telemetry and does not persist searches or responses.
+Redirects and every non-GET method are blocked. Normal compact output intentionally excludes addresses, phone numbers, birth dates, notes, history, document downloads and image URLs. The explicit codriver lookup is the narrow exception: it returns only the matching driver's name, phone, e-mail, start number, class and vehicle required for contact. `--full` explicitly returns every field present in the existing detail response, including personal data, notes and history. Use it only for authorized support purposes and avoid copying its output into tickets, chats or logs. The CLI has no telemetry and does not persist searches or responses.
 
 The pinned API snapshot is `contracts/backend-openapi.json`, sourced from backend commit `4e1aae2f99fe77d1f44d9129928eef5b4c99bdbd`.
 

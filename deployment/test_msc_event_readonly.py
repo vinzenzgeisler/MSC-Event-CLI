@@ -18,6 +18,10 @@ class WrapperTests(unittest.TestCase):
         self.assertEqual(MODULE.command_args(["health"]), ["health"])
         self.assertEqual(MODULE.command_args(["lookup", "--email", "a@example.org"])[0], "lookup")
         self.assertEqual(
+            MODULE.command_args(["lookup", "--codriver-name", "Max Mustermann"])[0],
+            "lookup",
+        )
+        self.assertEqual(
             MODULE.command_args(["detail", "--id", "00000000-0000-4000-8000-000000000000"])[0],
             "detail",
         )

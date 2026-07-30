@@ -60,17 +60,20 @@ nennung.command('lookup')
   .description('Nennung suchen')
   .addOption(new Option('--email <value>'))
   .addOption(new Option('--name <value>'))
+  .addOption(new Option('--codriver-name <value>'))
   .addOption(new Option('--orga-code <value>'))
   .addOption(new Option('--start-number <value>'))
   .action(async (options: {
     email?: string;
     name?: string;
+    codriverName?: string;
     orgaCode?: string;
     startNumber?: string;
   }) => {
     const supplied = [
       ['email', options.email],
       ['name', options.name],
+      ['codriver-name', options.codriverName],
       ['orga-code', options.orgaCode],
       ['start-number', options.startNumber],
     ].filter((item): item is [string, string] => Boolean(item[1]));
@@ -78,7 +81,12 @@ nennung.command('lookup')
       throw new Error('genau ein Suchkriterium ist erforderlich');
     }
     output(await event.lookup(
-      supplied[0]![0] as 'email' | 'name' | 'orga-code' | 'start-number',
+      supplied[0]![0] as
+        | 'email'
+        | 'name'
+        | 'codriver-name'
+        | 'orga-code'
+        | 'start-number',
       supplied[0]![1],
     ));
   });

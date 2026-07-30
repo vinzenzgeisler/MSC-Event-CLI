@@ -15,6 +15,25 @@ export type CompactEntry = {
   checkin: { idVerified: boolean; techStatus: string };
 };
 
+export type CompactCodriverMatch = {
+  entryId: string;
+  driver: {
+    firstName?: string | null;
+    lastName?: string | null;
+    email?: string | null;
+    phone?: string | null;
+  };
+  codriver: {
+    firstName?: string | null;
+    lastName?: string | null;
+  };
+  start: {
+    startNumber?: string | null;
+    className: string;
+    vehicle: string;
+  };
+};
+
 export const compactEntry = (response: EntryDetailResponse): CompactEntry => {
   const entry = response.entry;
   const vehicle = entry.vehicleLabel ?? ([entry.vehicle.make, entry.vehicle.model].filter(Boolean).join(' ') || 'Unbekannt');
@@ -47,6 +66,33 @@ export const compactEntry = (response: EntryDetailResponse): CompactEntry => {
     },
     documents: entry.documents.map(({ id, type, status }) => ({ id, type, status })),
     checkin: { idVerified: entry.checkin.checkinIdVerified, techStatus: entry.checkin.techStatus }
+  };
+};
+
+export const compactCodriverMatch = (
+  response: EntryDetailResponse,
+): CompactCodriverMatch => {
+  const entry = response.entry;
+  const vehicle = entry.vehicleLabel ??
+    ([entry.vehicle.make, entry.vehicle.model].filter(Boolean).join(' ') ||
+      'Unbekannt');
+  return {
+    entryId: entry.ids.entryId,
+    driver: {
+      firstName: entry.person.driver.firstName ?? null,
+      lastName: entry.person.driver.lastName ?? null,
+      email: entry.person.driver.email ?? null,
+      phone: entry.person.driver.phone ?? null,
+    },
+    codriver: {
+      firstName: entry.person.codriver?.firstName ?? null,
+      lastName: entry.person.codriver?.lastName ?? null,
+    },
+    start: {
+      startNumber: entry.startNumberNorm ?? null,
+      className: entry.className,
+      vehicle,
+    },
   };
 };
 

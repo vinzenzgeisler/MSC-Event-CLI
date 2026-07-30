@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { exactMatch, groupByDriver, parseSearchSpec } from '../src/lookup.js';
+import {
+  exactMatch,
+  exactPersonName,
+  groupByDriver,
+  parseSearchSpec,
+} from '../src/lookup.js';
 import type { EntryListItem } from '../src/schemas.js';
 
 const entry = (overrides: Partial<EntryListItem> = {}): EntryListItem => ({
@@ -22,6 +27,10 @@ const entry = (overrides: Partial<EntryListItem> = {}): EntryListItem => ({
 
 test('lookup requires exactly one non-empty option', () => {
   assert.deepEqual(parseSearchSpec({ orgaCode: ' ABC ' }), { kind: 'orgaCode', value: 'ABC' });
+  assert.deepEqual(parseSearchSpec({ codriverName: ' Max Mustermann ' }), {
+    kind: 'codriverName',
+    value: 'Max Mustermann',
+  });
   assert.throws(() => parseSearchSpec({}), /exactly one/);
   assert.throws(() => parseSearchSpec({ email: 'a@b.de', name: 'A B' }), /exactly one/);
 });
@@ -32,6 +41,8 @@ test('post-filtering is exact and normalized', () => {
   assert.equal(exactMatch(entry(), { kind: 'startNumber', value: '42' }), true);
   assert.equal(exactMatch(entry(), { kind: 'startNumber', value: '4' }), false);
   assert.equal(exactMatch(entry(), { kind: 'name', value: '  max   musterfahrer ' }), true);
+  assert.equal(exactMatch(entry(), { kind: 'codriverName', value: 'Max Musterfahrer' }), false);
+  assert.equal(exactPersonName(' Max ', ' Mustermann', 'max mustermann'), true);
 });
 
 test('grouping keeps double starters together and separates drivers', () => {

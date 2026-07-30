@@ -1,7 +1,12 @@
 import { CliError, EXIT } from './errors.js';
 import type { EntryListItem } from './schemas.js';
 
-export type SearchKind = 'orgaCode' | 'email' | 'name' | 'startNumber';
+export type SearchKind =
+  | 'orgaCode'
+  | 'email'
+  | 'name'
+  | 'startNumber'
+  | 'codriverName';
 export type SearchSpec = { kind: SearchKind; value: string };
 
 export const parseSearchSpec = (options: {
@@ -9,12 +14,14 @@ export const parseSearchSpec = (options: {
   email?: string;
   name?: string;
   startNumber?: string;
+  codriverName?: string;
 }): SearchSpec => {
   const candidates: SearchSpec[] = [
     { kind: 'orgaCode', value: options.orgaCode ?? '' },
     { kind: 'email', value: options.email ?? '' },
     { kind: 'name', value: options.name ?? '' },
-    { kind: 'startNumber', value: options.startNumber ?? '' }
+    { kind: 'startNumber', value: options.startNumber ?? '' },
+    { kind: 'codriverName', value: options.codriverName ?? '' },
   ];
   const values = candidates.map((item) => ({ ...item, value: item.value.trim() })).filter((item) => item.value.length > 0);
   if (values.length !== 1) {
@@ -30,8 +37,15 @@ export const exactMatch = (entry: EntryListItem, spec: SearchSpec): boolean => {
   if (spec.kind === 'orgaCode') return normalize(entry.orgaCode) === expected;
   if (spec.kind === 'email') return normalize(entry.driverEmail) === expected;
   if (spec.kind === 'startNumber') return normalize(entry.startNumberNorm) === expected;
+  if (spec.kind === 'codriverName') return false;
   return normalize(`${entry.driverFirstName ?? ''} ${entry.driverLastName ?? ''}`) === expected;
 };
+
+export const exactPersonName = (
+  firstName: string | null | undefined,
+  lastName: string | null | undefined,
+  expectedName: string,
+): boolean => normalize(`${firstName ?? ''} ${lastName ?? ''}`) === normalize(expectedName);
 
 export type DriverGroup = { driverPersonId: string; entries: EntryListItem[] };
 
