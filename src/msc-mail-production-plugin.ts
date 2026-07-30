@@ -4,6 +4,7 @@ import { lstat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
+import type { ActionPreview, JsonValue } from './action.js';
 import { MscMailProductionComposition } from './msc-mail-production-composition.js';
 import { loadMscMailProductionOptions } from './msc-mail-production-config.js';
 
@@ -137,6 +138,71 @@ const WATCH_ACCOUNTS = [
   'msc-info',
   'msc-vorstand',
 ] as const;
+
+const previewValue = (
+  preview: ActionPreview,
+  field: string,
+): JsonValue | undefined => preview.changes.find(
+  (change) => change.field === field,
+)?.after;
+
+const displayValue = (value: JsonValue | undefined): string | undefined => {
+  if (typeof value === 'string') return value;
+  if (value === undefined || value === null) return undefined;
+  return JSON.stringify(value);
+};
+
+const boundedApprovalBody = (body: string, maximum = 2_800): string => {
+  if (body.length <= maximum) return body;
+  const separator = '\n\n… [Mittelteil gekürzt] …\n\n';
+  const available = maximum - separator.length;
+  const startLength = Math.floor(available * 0.72);
+  return `${body.slice(0, startLength).trimEnd()}${separator}${
+    body.slice(-(available - startLength)).trimStart()
+  }`;
+};
+
+export const createMailApprovalDescription = (
+  preview: ActionPreview,
+  payloadReference: string,
+): string => {
+  const isReply = preview.changes.some(
+    (change) => change.field === 'Antwort',
+  );
+  const sourceMessage = displayValue(previewValue(preview, 'Quellnachricht'));
+  const body = displayValue(previewValue(
+    preview,
+    isReply ? 'Antwort' : 'Nachricht',
+  ));
+  const lines = [
+    isReply
+      ? 'Diese Antwort genau einmal senden'
+      : 'Diese E-Mail genau einmal senden',
+    `Konto: ${
+      displayValue(previewValue(
+        preview,
+        isReply ? 'Quellkonto' : 'Absenderkonto',
+      )) ?? preview.target
+    }`,
+    ...(sourceMessage ? [`Antwort auf Nachricht: ${sourceMessage}`] : []),
+    `Von: ${displayValue(previewValue(preview, 'Von')) ?? '—'}`,
+    `An: ${displayValue(previewValue(preview, 'An')) ?? preview.target}`,
+    ...(displayValue(previewValue(preview, 'BCC'))
+      ? [`BCC: ${displayValue(previewValue(preview, 'BCC'))}`]
+      : []),
+    `Betreff: ${displayValue(previewValue(preview, 'Betreff')) ?? '—'}`,
+    '',
+    isReply
+      ? 'Antworttext inkl. Signatur (lange Texte mittig gekürzt):'
+      : 'Nachrichtentext (lange Texte mittig gekürzt):',
+    boundedApprovalBody(body ?? '—'),
+    '',
+    `Prüfreferenz: ${payloadReference}`,
+    'SMTP-Preflight: erfolgreich',
+    'allow-once erlaubt genau diesen einen Versandversuch. Ein unklares Ergebnis wird quarantänisiert und niemals automatisch wiederholt.',
+  ];
+  return lines.join('\n');
+};
 
 const defaultConfigPath = (): string => join(
   homedir(),
@@ -368,21 +434,10 @@ export const registerMscMailProductionPlugin = (
       };
     }
     const nonce = randomUUID();
-    const subject = preview.changes.find(
-      (change) => change.field === 'Betreff',
-    )?.after;
-    const body = preview.changes.find(
-      (change) => change.field === 'Antwort' ||
-        change.field === 'Nachricht',
-    )?.after;
-    const description = [
-      preview.summary,
-      `Ziel: ${preview.target}`,
-      ...(typeof subject === 'string' ? [`Betreff: ${subject}`] : []),
-      ...(typeof body === 'string' ? [`Text: ${body}`] : []),
-      `Referenz: ${parsed.data.payloadReference}`,
-      'Der Versand erfolgt genau einmal über den konfigurierten MSC-SMTP-Account.',
-    ].join('\n').slice(0, 512);
+    const description = createMailApprovalDescription(
+      preview,
+      parsed.data.payloadReference,
+    );
     return {
       params: {
         ...event.params,

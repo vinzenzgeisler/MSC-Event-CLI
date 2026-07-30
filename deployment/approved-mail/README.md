@@ -24,8 +24,24 @@ Die bestehende Approval-Seite bleibt als native Gateway-Route unter
 gibt keinen eigenen Port, keinen Docker-Socket, kein Compose-Override und keine
 Caddy-Sonderroute. Das optionale Plugin-Tool `msc_mail_reply_propose` liest die
 konkrete Ursprungsmail erneut über den unveränderten Read-only-Provider und
-speichert nur einen verschlüsselten Entwurf. `msc_mail_reply_send` ist an den
-exakten Session-Key `agent:main:telegram:direct:8261978945` gebunden.
+speichert nur einen verschlüsselten Entwurf. Der reale RFC-Preview des
+Providers wird dabei nur im begrenzten Headerbereich ausgewertet.
+`msc_mail_reply_send` ist an den exakten Session-Key
+`agent:main:telegram:direct:8261978945` gebunden.
+
+Antworten erhalten zentral die verifizierte Signatur von Vinzenz. Beim Konto
+`msc-nennung` wird zusätzlich dieses Konto selbst als BCC-Empfänger gebunden.
+Signatur und BCC sind Teil des verschlüsselten Approval-Payloads und werden in
+der Telegram-Freigabe vollständig angezeigt.
+
+Der Posteingangswächter läuft als isolierter OpenClaw-Cronjob alle fünf
+Minuten. Sein Trigger steht in `inbox-watcher-trigger.js`; er liest ausschließlich
+die drei INBOX-Listen über `/usr/local/bin/msc-mail-readonly`, speichert nur
+Nachrichten-IDs und meldet ausschließlich neue, extern eingegangene IDs. Beim
+ersten Lauf nach einer Trigger-Versionierung wird nur ein Ausgangsstand
+gebildet, damit alte Nachrichten keine Freigabeflut auslösen. Der isolierte
+Agent darf Quellen prüfen und verschlüsselte Antwortentwürfe anlegen, aber
+niemals selbst senden.
 
 Das Installationsskript startet den Gateway bewusst nicht neu. Nach
 erfolgreicher Vorbereitung ist genau ein sicherer, auf aktive Arbeit wartender

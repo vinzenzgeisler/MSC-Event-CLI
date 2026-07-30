@@ -22,6 +22,10 @@ const plainAddressSchema = z.string().trim().email().max(320).refine(
   (value) => !/[\r\n<>]/.test(value),
   'plain email address without display name or line breaks required',
 );
+const replySignatureSchema = z.string().trim().min(1).max(2_000).refine(
+  (value) => !value.includes('\0'),
+  'reply signature contains a forbidden null byte',
+);
 
 const mailAfterSchema = z.object({
   account: mscMailAccountSchema,
@@ -42,6 +46,8 @@ const mailStateSchema = z.object({
   account: mscMailAccountSchema,
   senderIdentity: plainAddressSchema,
   allowedFolders: z.array(z.string().trim().min(1).max(100)).min(1).max(20),
+  replySignature: replySignatureSchema.optional(),
+  replyBccToSelf: z.boolean().optional(),
 }).strict();
 
 const mailParametersSchema = z.object({
@@ -62,9 +68,9 @@ export type MailSendIntent = Omit<
     label?: string;
   };
   before: null;
-  after: z.infer<typeof mailAfterSchema>;
-  expectedState: z.infer<typeof mailStateSchema>;
-  parameters: z.infer<typeof mailParametersSchema>;
+  after: z.infer<typeof mailAfterSchema> & Record<string, JsonValue>;
+  expectedState: z.infer<typeof mailStateSchema> & Record<string, JsonValue>;
+  parameters: z.infer<typeof mailParametersSchema> & Record<string, JsonValue>;
 };
 
 export interface MscMailAccountPolicy {
@@ -76,12 +82,13 @@ export interface MscMailAccountPolicy {
       senderIdentity: string;
       displayName: string;
       allowedFolders: string[];
+      replySignature?: string | undefined;
+      replyBccToSelf?: boolean | undefined;
     }
   >;
 }
 
-export const mscMailAccountPolicySchema: z.ZodType<MscMailAccountPolicy> =
-  z.object({
+export const mscMailAccountPolicySchema = z.object({
     version: z.literal(1),
     accounts: z.object({
       'msc-nennung': z.object({
@@ -89,18 +96,24 @@ export const mscMailAccountPolicySchema: z.ZodType<MscMailAccountPolicy> =
         senderIdentity: z.string().trim().min(1).max(320),
         displayName: z.string().trim().min(1).max(200),
         allowedFolders: z.array(z.string().trim().min(1).max(100)).min(1).max(20),
+        replySignature: replySignatureSchema.optional(),
+        replyBccToSelf: z.boolean().optional(),
       }).strict(),
       'msc-info': z.object({
         active: z.boolean(),
         senderIdentity: z.string().trim().min(1).max(320),
         displayName: z.string().trim().min(1).max(200),
         allowedFolders: z.array(z.string().trim().min(1).max(100)).min(1).max(20),
+        replySignature: replySignatureSchema.optional(),
+        replyBccToSelf: z.boolean().optional(),
       }).strict(),
       'msc-vorstand': z.object({
         active: z.boolean(),
         senderIdentity: z.string().trim().min(1).max(320),
         displayName: z.string().trim().min(1).max(200),
         allowedFolders: z.array(z.string().trim().min(1).max(100)).min(1).max(20),
+        replySignature: replySignatureSchema.optional(),
+        replyBccToSelf: z.boolean().optional(),
       }).strict(),
     }).strict(),
   }).strict();
@@ -125,9 +138,13 @@ export const parseMailSendIntent = (input: unknown): MailSendIntent => {
     label: z.string().trim().min(1).max(500).optional(),
   }).strict().parse(intent.target);
   if (intent.before !== null) throw new Error('mail.send before state must be null');
-  const after = mailAfterSchema.parse(intent.after);
-  const expectedState = mailStateSchema.parse(intent.expectedState);
-  const parameters = mailParametersSchema.parse(intent.parameters);
+  const after = mailAfterSchema.parse(intent.after) as MailSendIntent['after'];
+  const expectedState = mailStateSchema.parse(
+    intent.expectedState,
+  ) as MailSendIntent['expectedState'];
+  const parameters = mailParametersSchema.parse(
+    intent.parameters,
+  ) as MailSendIntent['parameters'];
   if (
     target.id !== after.account ||
     target.id !== expectedState.account ||
@@ -184,6 +201,12 @@ export const createMailSendIntent = (
       account,
       senderIdentity: from,
       allowedFolders: accountPolicy.allowedFolders,
+      ...(accountPolicy.replySignature === undefined
+        ? {}
+        : { replySignature: accountPolicy.replySignature }),
+      ...(accountPolicy.replyBccToSelf === undefined
+        ? {}
+        : { replyBccToSelf: accountPolicy.replyBccToSelf }),
     },
     parameters: {
       dryRun: draft.deliveryMode !== 'approved-send',
@@ -232,6 +255,7 @@ const mailReplySourceSchema = z.object({
 }).strict();
 
 const mailReplyAfterSchema = mailAfterSchema.extend({
+  bcc: z.array(plainAddressSchema).max(3).optional(),
   sourceFolder: sourceFieldSchema,
   inReplyToMessageId: sourceFieldSchema,
 }).strict();
@@ -255,9 +279,9 @@ export type MailReplyIntent = Omit<
     label?: string;
   };
   before: z.infer<typeof mailReplySourceSchema>;
-  after: z.infer<typeof mailReplyAfterSchema>;
-  expectedState: z.infer<typeof mailReplyStateSchema>;
-  parameters: z.infer<typeof mailReplyParametersSchema>;
+  after: z.infer<typeof mailReplyAfterSchema> & Record<string, JsonValue>;
+  expectedState: z.infer<typeof mailReplyStateSchema> & Record<string, JsonValue>;
+  parameters: z.infer<typeof mailReplyParametersSchema> & Record<string, JsonValue>;
 };
 
 export interface MailReplyDraft {
@@ -282,9 +306,13 @@ export const parseMailReplyIntent = (input: unknown): MailReplyIntent => {
     label: z.string().trim().min(1).max(500).optional(),
   }).strict().parse(intent.target);
   const before = mailReplySourceSchema.parse(intent.before);
-  const after = mailReplyAfterSchema.parse(intent.after);
-  const expectedState = mailReplyStateSchema.parse(intent.expectedState);
-  const parameters = mailReplyParametersSchema.parse(intent.parameters);
+  const after = mailReplyAfterSchema.parse(intent.after) as MailReplyIntent['after'];
+  const expectedState = mailReplyStateSchema.parse(
+    intent.expectedState,
+  ) as MailReplyIntent['expectedState'];
+  const parameters = mailReplyParametersSchema.parse(
+    intent.parameters,
+  ) as MailReplyIntent['parameters'];
   if (
     target.id !== replyTargetId(before) ||
     before.account !== after.account ||
@@ -296,6 +324,16 @@ export const parseMailReplyIntent = (input: unknown): MailReplyIntent => {
     JSON.stringify(expectedState.source) !== JSON.stringify(before)
   ) {
     throw new Error('reply account, source message, sender and recipient must match');
+  }
+  const expectedBcc = expectedState.replyBccToSelf
+    ? [expectedState.senderIdentity]
+    : [];
+  if (JSON.stringify(after.bcc ?? []) !== JSON.stringify(expectedBcc)) {
+    throw new Error('reply BCC must match the account policy');
+  }
+  if (expectedState.replySignature &&
+      !after.bodyText.endsWith(expectedState.replySignature)) {
+    throw new Error('reply body must contain the account signature');
   }
   if (!expectedState.allowedFolders.includes(before.folder)) {
     throw new Error('source folder is not allowed by the account policy');
@@ -319,6 +357,16 @@ export const parseMailReplyIntent = (input: unknown): MailReplyIntent => {
 const replySubject = (subject: string): string => (
   /^re\s*:/i.test(subject) ? subject : `Re: ${subject}`
 );
+
+const signedReplyBody = (bodyText: string, signature?: string): string => {
+  const body = bodyText.replaceAll('\r\n', '\n').trim();
+  if (!signature) return body;
+  const normalizedSignature = replySignatureSchema.parse(signature)
+    .replaceAll('\r\n', '\n');
+  return body.endsWith(normalizedSignature)
+    ? body
+    : `${body}\n\n${normalizedSignature}`;
+};
 
 export const createMailReplyIntent = (
   policy: MscMailAccountPolicy,
@@ -353,8 +401,9 @@ export const createMailReplyIntent = (
       account: source.account,
       from,
       to: source.from,
+      ...(accountPolicy.replyBccToSelf ? { bcc: [from] } : {}),
       subject: replySubject(source.subject),
-      bodyText: draft.bodyText,
+      bodyText: signedReplyBody(draft.bodyText, accountPolicy.replySignature),
       sourceFolder: source.folder,
       inReplyToMessageId: source.messageId,
     },
@@ -363,6 +412,12 @@ export const createMailReplyIntent = (
       account: source.account,
       senderIdentity: from,
       allowedFolders,
+      ...(accountPolicy.replySignature === undefined
+        ? {}
+        : { replySignature: accountPolicy.replySignature }),
+      ...(accountPolicy.replyBccToSelf === undefined
+        ? {}
+        : { replyBccToSelf: accountPolicy.replyBccToSelf }),
       source,
     },
     parameters: {
@@ -391,6 +446,9 @@ export class MailReplyPreviewRenderer implements PreviewRenderer<MailReplyIntent
         { field: 'Quellnachricht', before: intent.before.messageId, after: intent.after.inReplyToMessageId },
         { field: 'Von', before: null, after: intent.after.from },
         { field: 'An', before: intent.before.from, after: intent.after.to },
+        ...(intent.after.bcc?.length
+          ? [{ field: 'BCC', before: null, after: intent.after.bcc.join(', ') }]
+          : []),
         { field: 'Betreff', before: intent.before.subject, after: intent.after.subject },
         { field: 'Antwort', before: null, after: intent.after.bodyText },
         {
@@ -419,7 +477,9 @@ export class MailReplyDryRunAdapter implements ExecutorAdapter<MailReplyIntent> 
 
   async readCurrentState(intentValue: MailReplyIntent): Promise<JsonValue> {
     const intent = parseMailReplyIntent(intentValue);
-    return mailReplyStateSchema.parse(await this.readSourceState(intent.before));
+    return mailReplyStateSchema.parse(
+      await this.readSourceState(intent.before),
+    ) as JsonValue;
   }
 
   async execute(
@@ -437,6 +497,9 @@ export class MailReplyDryRunAdapter implements ExecutorAdapter<MailReplyIntent> 
           account: intent.after.account,
           from: intent.after.from,
           to: intent.after.to,
+          ...(intent.after.bcc === undefined
+            ? {}
+            : { bcc: intent.after.bcc }),
           subject: intent.after.subject,
           bodyText: intent.after.bodyText,
           sourceFolder: intent.after.sourceFolder,
@@ -463,7 +526,9 @@ export class MailSendDryRunAdapter implements ExecutorAdapter<MailSendIntent> {
 
   async readCurrentState(intentValue: MailSendIntent): Promise<JsonValue> {
     const intent = parseMailSendIntent(intentValue);
-    return mailStateSchema.parse(await this.readPolicyState(intent.after.account));
+    return mailStateSchema.parse(
+      await this.readPolicyState(intent.after.account),
+    ) as JsonValue;
   }
 
   async execute(

@@ -48,6 +48,7 @@ interface SmtpClient {
     envelope: { from: string; to: string[] };
     from: string;
     to: string;
+    bcc?: string[];
     subject: string;
     text: string;
     messageId: string;
@@ -166,10 +167,16 @@ export class SmtpMailTransport implements MailTransport {
       return { status: 'not-submitted', reasonCode: 'sender-policy-mismatch' };
     }
 
+    const recipients = [...new Set(
+      [envelope.to, ...(envelope.bcc ?? [])].map(
+        (address) => address.toLowerCase(),
+      ),
+    )];
     const info = await selected.client.sendMail({
-      envelope: { from: envelope.from, to: [envelope.to] },
+      envelope: { from: envelope.from, to: recipients },
       from: envelope.from,
       to: envelope.to,
+      ...(envelope.bcc?.length ? { bcc: envelope.bcc } : {}),
       subject: envelope.subject,
       text: envelope.bodyText,
       messageId: envelope.messageId,
@@ -179,13 +186,12 @@ export class SmtpMailTransport implements MailTransport {
       disableFileAccess: true,
       disableUrlAccess: true,
     });
-    const recipient = envelope.to.toLowerCase();
     const accepted = (info.accepted ?? []).map(normalizedAddress);
     const rejected = (info.rejected ?? []).map(normalizedAddress);
     if (
       info.messageId === envelope.messageId &&
-      accepted.includes(recipient) &&
-      !rejected.includes(recipient) &&
+      recipients.every((recipient) => accepted.includes(recipient)) &&
+      recipients.every((recipient) => !rejected.includes(recipient)) &&
       (info.pending?.length ?? 0) === 0
     ) {
       return { status: 'accepted' };

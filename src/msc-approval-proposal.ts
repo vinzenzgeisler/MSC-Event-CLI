@@ -23,6 +23,7 @@ import type {
   MscMailProviderEnvelope,
   MscMailReadonlyProvider,
 } from './mail-readonly-provider.js';
+import { parseMailPreviewSource } from './mail-preview-source.js';
 
 const exactHttpsOriginSchema = z.string().url().superRefine((value, context) => {
   const url = new URL(value);
@@ -148,23 +149,11 @@ export const loadPrivateMscApprovalKey = async (
   await safeFile(path, expectedOwnerUid, 256, true),
 );
 
-const mailSourceSchema = z.object({
-  id: z.union([z.string(), z.number()]).transform(String),
-  from: z.union([
-    z.string().email(),
-    z.object({ addr: z.string().email() }).passthrough().transform((value) => value.addr),
-  ]),
-  subject: z.string().trim().min(1).max(200),
-}).passthrough();
-
 const sourceFromEnvelope = (
   envelope: MscMailProviderEnvelope,
   expectedMessageId: string,
 ): { from: string; subject: string } => {
-  const source = mailSourceSchema.parse(envelope.data);
-  if (source.id !== expectedMessageId) {
-    throw new Error('mail provider returned a mismatched source message');
-  }
+  const source = parseMailPreviewSource(envelope.data, expectedMessageId);
   return { from: source.from, subject: source.subject };
 };
 

@@ -17,7 +17,7 @@ import {
 } from './mail-approved-action.js';
 import type { MailOutboxDispatchWorker, MailDispatchResult } from './mail-outbox-transport.js';
 import type { MscMailReadonlyProvider, MscMailProviderEnvelope } from './mail-readonly-provider.js';
-import { z } from 'zod';
+import { parseMailPreviewSource } from './mail-preview-source.js';
 
 export interface ProposedMailReply {
   actionId: string;
@@ -35,16 +35,6 @@ export interface MailReplyFromSourceInput {
   sources: string[];
   uncertainties?: string[];
 }
-
-const mailSourceSchema = z.object({
-  id: z.union([z.string(), z.number()]).transform(String),
-  from: z.union([
-    z.string().email(),
-    z.object({ addr: z.string().email() }).passthrough()
-      .transform((value) => value.addr),
-  ]),
-  subject: z.string().trim().min(1).max(200),
-}).passthrough();
 
 export interface MscMailFlowOptions {
   provider: MscMailReadonlyProvider;
@@ -101,10 +91,7 @@ export class MscMailFlow {
       input.folder,
       input.messageId,
     );
-    const source = mailSourceSchema.parse(envelope.data);
-    if (source.id !== input.messageId) {
-      throw new Error('mail provider returned a mismatched source message');
-    }
+    const source = parseMailPreviewSource(envelope.data, input.messageId);
     return this.proposeReply({
       source: {
         account: input.account,
@@ -143,6 +130,12 @@ export const createMailReplyOutboxAdapter = (
   account: source.account,
   senderIdentity: policy.accounts[source.account].senderIdentity,
   allowedFolders: policy.accounts[source.account].allowedFolders,
+  ...(policy.accounts[source.account].replySignature === undefined
+    ? {}
+    : { replySignature: policy.accounts[source.account].replySignature }),
+  ...(policy.accounts[source.account].replyBccToSelf === undefined
+    ? {}
+    : { replyBccToSelf: policy.accounts[source.account].replyBccToSelf }),
   source,
 }));
 
@@ -153,4 +146,10 @@ export const createMailSendOutboxAdapter = (
   account,
   senderIdentity: policy.accounts[account].senderIdentity,
   allowedFolders: policy.accounts[account].allowedFolders,
+  ...(policy.accounts[account].replySignature === undefined
+    ? {}
+    : { replySignature: policy.accounts[account].replySignature }),
+  ...(policy.accounts[account].replyBccToSelf === undefined
+    ? {}
+    : { replyBccToSelf: policy.accounts[account].replyBccToSelf }),
 }));

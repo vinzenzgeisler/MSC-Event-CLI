@@ -116,6 +116,56 @@ test('checks SMTP readiness without submitting a message', async () => {
   });
 });
 
+test('submits BCC as an envelope recipient and requires its acceptance', async () => {
+  const bcc = 'nennung@msc-oberlausitzer-dreilaendereck.eu';
+  const messages: unknown[] = [];
+  const transport = new SmtpMailTransport([config], () => ({
+    async sendMail(message) {
+      messages.push(message);
+      return {
+        accepted: [envelope.to, bcc],
+        rejected: [],
+        pending: [],
+        messageId: envelope.messageId,
+      };
+    },
+  }));
+  assert.deepEqual(await transport.deliver({
+    ...envelope,
+    bcc: [bcc],
+  }), { status: 'accepted' });
+  assert.deepEqual(messages, [{
+    envelope: { from: envelope.from, to: [envelope.to, bcc] },
+    from: envelope.from,
+    to: envelope.to,
+    bcc: [bcc],
+    subject: envelope.subject,
+    text: envelope.bodyText,
+    messageId: envelope.messageId,
+    inReplyTo: envelope.inReplyToMessageId,
+    disableFileAccess: true,
+    disableUrlAccess: true,
+  }]);
+
+  const incomplete = new SmtpMailTransport([config], () => ({
+    async sendMail() {
+      return {
+        accepted: [envelope.to],
+        rejected: [],
+        pending: [],
+        messageId: envelope.messageId,
+      };
+    },
+  }));
+  assert.deepEqual(await incomplete.deliver({
+    ...envelope,
+    bcc: [bcc],
+  }), {
+    status: 'unknown',
+    reasonCode: 'provider-acceptance-not-confirmed',
+  });
+});
+
 test('fails before submission for missing account or sender mismatch', async () => {
   let calls = 0;
   const transport = new SmtpMailTransport([config], () => ({

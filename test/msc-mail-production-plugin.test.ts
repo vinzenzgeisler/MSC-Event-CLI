@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import test from 'node:test';
 import {
+  createMailApprovalDescription,
   registerMscMailProductionPlugin,
   type MscMailProductionPluginApi,
 } from '../src/msc-mail-production-plugin.js';
@@ -70,6 +71,42 @@ test('registers all tools during tool discovery without runtime surfaces', () =>
   assert.equal(watch?.name, 'msc_mail_watch_list');
   assert.equal(proposal?.name, 'msc_mail_reply_propose');
   assert.equal(send?.name, 'msc_mail_reply_send');
+});
+
+test('renders a clear approval with BCC, exact body and signature', () => {
+  const description = createMailApprovalDescription({
+    title: 'Auf MSC-E-Mail antworten',
+    summary: 'Reply',
+    target: 'MSC Nennung → driver@example.org',
+    risk: 'high',
+    changes: [
+      { field: 'Quellkonto', before: 'msc-nennung', after: 'msc-nennung' },
+      { field: 'Quellnachricht', before: '1173', after: '1173' },
+      { field: 'Von', before: null, after: 'nennung@msc.example' },
+      { field: 'An', before: 'driver@example.org', after: 'driver@example.org' },
+      { field: 'BCC', before: null, after: 'nennung@msc.example' },
+      { field: 'Betreff', before: 'Frage', after: 'Re: Frage' },
+      {
+        field: 'Antwort',
+        before: null,
+        after: [
+          'Guten Tag,',
+          '',
+          'vielen Dank für Ihre Nachricht.',
+          '',
+          'Mit freundlichen Grüßen',
+          'Vinzenz Geisler',
+        ].join('\n'),
+      },
+    ],
+  }, 'abcdef012345');
+
+  assert.match(description, /^Diese Antwort genau einmal senden/);
+  assert.match(description, /BCC: nennung@msc\.example/);
+  assert.match(description, /Antworttext inkl\. Signatur/);
+  assert.match(description, /Mit freundlichen Grüßen\nVinzenz Geisler/);
+  assert.match(description, /SMTP-Preflight: erfolgreich/);
+  assert.match(description, /niemals automatisch wiederholt/);
 });
 
 test('fails closed before service startup for HTTP and proposal execution', async () => {
