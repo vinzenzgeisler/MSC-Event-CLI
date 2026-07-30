@@ -94,6 +94,7 @@ export class MscMailProductionComposition {
   readonly adapter: PrivateApprovalHttpAdapter;
   readonly host: MscOperationsHostRuntime;
   readonly provider: MscMailReadonlyProvider;
+  readonly smtpTransport: SmtpMailTransport;
   private closed = false;
   private readonly reviewerActor: string;
   private readonly operatorSessionKey: string | undefined;
@@ -158,13 +159,13 @@ export class MscMailProductionComposition {
         this.registrationHttp,
       );
       this.provider = new MscMailReadonlyProvider(options.providerRunner);
-      const transport = new SmtpMailTransport(
+      this.smtpTransport = new SmtpMailTransport(
         options.smtpAccounts,
         options.smtpClientFactory,
       );
       const worker = new MailOutboxDispatchWorker(
         this.outbox,
-        transport,
+        this.smtpTransport,
         {
           workerId: options.workerId,
           messageIdDomain: options.messageIdDomain,
@@ -245,6 +246,30 @@ export class MscMailProductionComposition {
     return record.intent.kind === 'mail.reply'
       ? new MailReplyPreviewRenderer().render(parseMailReplyIntent(record.intent))
       : new MailSendPreviewRenderer().render(parseMailSendIntent(record.intent));
+  }
+
+  async assertGatewaySmtpReady(
+    actionId: string,
+    payloadReference: string,
+    sessionKey: string,
+  ): Promise<void> {
+    this.assertGatewayOperatorSession(sessionKey);
+    const record = await this.review.queue.review(actionId);
+    if (record.intent.kind !== 'mail.reply' && record.intent.kind !== 'mail.send') {
+      throw new Error('gateway approval supports only mail actions');
+    }
+    if (record.payloadHash.slice(0, 12) !== payloadReference) {
+      throw new Error('payload reference does not match the pending action');
+    }
+    const account = record.intent.kind === 'mail.reply'
+      ? parseMailReplyIntent(record.intent).after.account
+      : parseMailSendIntent(record.intent).after.account;
+    const readiness = await this.smtpTransport.checkReady(account);
+    if (!readiness.ready) {
+      throw new Error(
+        'STRATO-SMTP ist nicht erreichbar; die Mailfreigabe wurde nicht angefordert oder verbraucht',
+      );
+    }
   }
 
   async approveAndDispatchFromGateway(options: {
