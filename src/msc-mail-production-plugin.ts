@@ -15,6 +15,30 @@ import { EventEntryHttpMutationTransport } from './event-http-mutation-transport
 import { MscMailProductionComposition } from './msc-mail-production-composition.js';
 import { loadMscMailProductionOptions } from './msc-mail-production-config.js';
 
+export const eventAutomationTokenEnv = (
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv | undefined => {
+  const tokenUrl = env.MSC_EVENT_AUTOMATION_COGNITO_URL?.trim();
+  const clientId = env.MSC_EVENT_AUTOMATION_COGNITO_CLIENT_ID?.trim();
+  const clientSecretFile =
+    env.MSC_EVENT_AUTOMATION_COGNITO_CLIENT_SECRET_FILE?.trim();
+  const configured = [tokenUrl, clientId, clientSecretFile]
+    .filter((value) => Boolean(value)).length;
+  if (configured === 0) return undefined;
+  if (configured !== 3) {
+    throw new Error(
+      'Set MSC_EVENT_AUTOMATION_COGNITO_URL, '
+      + 'MSC_EVENT_AUTOMATION_COGNITO_CLIENT_ID and '
+      + 'MSC_EVENT_AUTOMATION_COGNITO_CLIENT_SECRET_FILE together.',
+    );
+  }
+  return {
+    MSC_EVENT_COGNITO_URL: tokenUrl,
+    MSC_EVENT_COGNITO_CLIENT_ID: clientId,
+    MSC_EVENT_COGNITO_CLIENT_SECRET_FILE: clientSecretFile,
+  };
+};
+
 type ToolResult = {
   content: Array<{ type: 'text'; text: string }>;
   details: Record<string, unknown>;
@@ -721,12 +745,18 @@ export const registerMscMailProductionPlugin = (
         );
       }
       const eventBaseUrlRaw = process.env.MSC_EVENT_API_URL?.trim();
-      const eventMutationTransport = eventBaseUrlRaw
+      const automationEnv = eventAutomationTokenEnv();
+      if (automationEnv && !eventBaseUrlRaw) {
+        throw new Error(
+          'MSC_EVENT_API_URL is required when event automation credentials are configured.',
+        );
+      }
+      const eventMutationTransport = eventBaseUrlRaw && automationEnv
         ? new EventEntryHttpMutationTransport({
           baseUrl: parseBaseUrl(eventBaseUrlRaw),
           tokenProvider: (scope) => loadAccessToken({
             env: {
-              ...process.env,
+              ...automationEnv,
               MSC_EVENT_COGNITO_SCOPE: scope,
             },
           }),
