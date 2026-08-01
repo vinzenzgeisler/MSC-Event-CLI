@@ -152,8 +152,11 @@ export const loadPrivateMscApprovalKey = async (
 const sourceFromEnvelope = (
   envelope: MscMailProviderEnvelope,
   expectedMessageId: string,
+  trustedSenderIdentity: string,
 ): { from: string; subject: string } => {
-  const source = parseMailPreviewSource(envelope.data, expectedMessageId);
+  const source = parseMailPreviewSource(envelope.data, expectedMessageId, {
+    trustedSenderIdentity,
+  });
   return { from: source.from, subject: source.subject };
 };
 
@@ -219,7 +222,11 @@ export class MscApprovalProposalWriter {
       input.folder,
       input.messageId,
     );
-    const source = sourceFromEnvelope(envelope, input.messageId);
+    const source = sourceFromEnvelope(
+      envelope,
+      input.messageId,
+      this.mailPolicy.accounts[input.account].senderIdentity,
+    );
     const intent = createMailReplyIntent(this.mailPolicy, {
       source: {
         account: input.account,
