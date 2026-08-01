@@ -260,56 +260,51 @@ const displayValue = (value: JsonValue | undefined): string | undefined => {
 };
 
 
-const boundedApprovalBody = (body: string, maximum = 2_800): string => {
-  if (body.length <= maximum) return body;
-  const separator = '\n\n… [Mittelteil gekürzt] …\n\n';
-  const available = maximum - separator.length;
-  const startLength = Math.floor(available * 0.72);
-  return `${body.slice(0, startLength).trimEnd()}${separator}${
-    body.slice(-(available - startLength)).trimStart()
-  }`;
+const compactApprovalValue = (
+  value: JsonValue | undefined,
+  fallback = '—',
+  maximum = 72,
+): string => {
+  const displayed = displayValue(value)?.trim() || fallback;
+  if (displayed.length <= maximum) return displayed;
+  return `${displayed.slice(0, maximum - 1).trimEnd()}…`;
 };
 
 export const createMailApprovalDescription = (
   preview: ActionPreview,
-  payloadReference: string,
+  _payloadReference: string,
 ): string => {
   const isReply = preview.changes.some(
     (change) => change.field === 'Antwort',
   );
-  const sourceMessage = displayValue(previewValue(preview, 'Quellnachricht'));
   const body = displayValue(previewValue(
     preview,
     isReply ? 'Antwort' : 'Nachricht',
-  ));
-  const lines = [
-    isReply
-      ? 'Diese Antwort genau einmal senden'
-      : 'Diese E-Mail genau einmal senden',
-    `Konto: ${
-      displayValue(previewValue(
-        preview,
-        isReply ? 'Quellkonto' : 'Absenderkonto',
-      )) ?? preview.target
-    }`,
-    ...(sourceMessage ? [`Antwort auf Nachricht: ${sourceMessage}`] : []),
-    `Von: ${displayValue(previewValue(preview, 'Von')) ?? '—'}`,
-    `An: ${displayValue(previewValue(preview, 'An')) ?? preview.target}`,
-    ...(displayValue(previewValue(preview, 'BCC'))
-      ? [`BCC: ${displayValue(previewValue(preview, 'BCC'))}`]
-      : []),
-    `Betreff: ${displayValue(previewValue(preview, 'Betreff')) ?? '—'}`,
+  ))?.trim() || '—';
+  const subject = compactApprovalValue(
+    previewValue(preview, 'Betreff'),
+    '—',
+    80,
+  );
+  const reason = isReply
+    ? 'Passende Antwort auf die eingegangene Anfrage.'
+    : 'Neue ausgehende Nachricht.';
+  const header = [
+    isReply ? 'Antwort freigeben' : 'E-Mail freigeben',
+    `Absender: ${compactApprovalValue(previewValue(preview, 'Von'))}`,
+    `Empfänger: ${compactApprovalValue(previewValue(preview, 'An'), preview.target)}`,
+    `BCC: ${compactApprovalValue(previewValue(preview, 'BCC'))}`,
+    `Betreff: ${subject}`,
     '',
-    isReply
-      ? 'Antworttext inkl. Signatur (lange Texte mittig gekürzt):'
-      : 'Nachrichtentext (lange Texte mittig gekürzt):',
-    boundedApprovalBody(body ?? '—'),
-    '',
-    `Prüfreferenz: ${payloadReference}`,
-    'SMTP-Preflight: erfolgreich',
-    'allow-once erlaubt genau diesen einen Versandversuch. Ein unklares Ergebnis wird quarantänisiert und niemals automatisch wiederholt.',
+    '--- DAS KOMMT IN DIE MAIL ---',
   ];
-  return lines.join('\n');
+  const footer = ['--- ENDE MAIL ---', '', `Begründung: ${reason}`];
+  const frame = [...header, '', ...footer].join('\n');
+  const bodyLimit = Math.max(1, 511 - frame.length);
+  const shownBody = body.length <= bodyLimit
+    ? body
+    : `${body.slice(0, Math.max(0, bodyLimit - 1)).trimEnd()}…`;
+  return [...header, shownBody, ...footer].join('\n');
 };
 
 const defaultConfigPath = (): string => join(
