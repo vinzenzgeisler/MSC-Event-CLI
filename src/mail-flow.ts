@@ -91,7 +91,10 @@ export class MscMailFlow {
       input.folder,
       input.messageId,
     );
-    const source = parseMailPreviewSource(envelope.data, input.messageId);
+    const source = parseMailPreviewSource(envelope.data, input.messageId, {
+      trustedSenderIdentity:
+        this.options.policy.accounts[input.account].senderIdentity,
+    });
     return this.proposeReply({
       source: {
         account: input.account,

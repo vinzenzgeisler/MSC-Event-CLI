@@ -232,3 +232,71 @@ test('creates a proposal from the exact read-only source returned by the provide
   outbox.close();
   store.close();
 });
+
+test('creates a contact-form proposal for the validated form address', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'msc-contact-form-proposal-'));
+  const databasePath = join(directory, 'flow.sqlite');
+  const store = new SqliteApprovalStore(databasePath, {
+    encryptionKey: Buffer.alloc(32, 83),
+  });
+  const queue = new ApprovalQueue({
+    store,
+    signingKey: Buffer.alloc(32, 84),
+    freshAuthVerifier: {
+      async verify() {
+        throw new Error('must not approve');
+      },
+    },
+  });
+  const outbox = new SqliteDurableOutbox(databasePath, {
+    encryptionKey: Buffer.alloc(32, 83),
+  });
+  const provider = new MscMailReadonlyProvider(async () => ({
+    stdout: JSON.stringify({
+      schema: 'msc.mail-provider.v1',
+      provider: 'himalaya',
+      operation: 'preview',
+      source: { mailbox: 'MSC Info', account: 'msc-info', folder: 'INBOX' },
+      data: [
+        'Message-ID: <contact-form@example.org>',
+        'From: MSC Oberlausitzer Dreiländereck <info@msc-oberlausitzer-dreilaendereck.eu>',
+        'To: info@msc-oberlausitzer-dreilaendereck.eu',
+        'Subject: Neue Nachricht: Nennung Oberlausitzer Dreieck',
+        '',
+        'Name: Patrick Krause',
+        'E-Mail: patkra147@gmail.com',
+        'Nachricht:',
+        'Darf ich teilnehmen?',
+      ].join('\r\n'),
+    }),
+  }));
+  const flow = new MscMailFlow({
+    provider,
+    policy,
+    queue,
+    outboxCoordinator: new ApprovedActionOutboxCoordinator(queue, [
+      createMailReplyOutboxAdapter(policy),
+    ]),
+    dispatchWorker: new MailOutboxDispatchWorker(
+      outbox,
+      { async deliver() { throw new Error('must not send'); } },
+      { workerId: 'contact-form-test', messageIdDomain: 'mail.msc.example' },
+    ),
+    approvalUrl: (actionId) => `https://approval.example/approve/${actionId}`,
+  });
+
+  const result = await flow.proposeReplyFromSource({
+    account: 'msc-info',
+    folder: 'INBOX',
+    messageId: '6883',
+    bodyText: 'Guten Tag Herr Krause,\n\nIhre Nennung ist angenommen.',
+    sources: ['MSC Event RegistrationProvider'],
+  }, 'reply:msc-info:6883:v1');
+
+  assert.ok(result.preview.changes.some(
+    (change) => change.field === 'An' &&
+      change.after === 'patkra147@gmail.com',
+  ));
+  outbox.close();
+  store.close();
+});

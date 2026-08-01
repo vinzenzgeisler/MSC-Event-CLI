@@ -14,8 +14,18 @@ const structuredSource = z.object({
     email,
     z.object({ addr: email }).passthrough().transform((value) => value.addr),
   ]),
+  replyTo: z.union([
+    email,
+    z.object({ addr: email }).passthrough().transform((value) => value.addr),
+  ]).optional(),
   subject,
 }).passthrough();
+
+const MSC_CONTACT_FORM_SUBJECT = 'Neue Nachricht: Nennung Oberlausitzer Dreieck';
+
+export interface ParseMailPreviewSourceOptions {
+  trustedSenderIdentity?: string;
+}
 
 export interface ParsedMailPreviewSource {
   id: string;
@@ -48,7 +58,10 @@ const headerBlock = (preview: string): Map<string, string> => {
     if (!/^[a-z0-9-]{1,100}$/.test(name)) {
       throw new Error('mail preview contains an invalid header name');
     }
-    if (headers.has(name) && (name === 'from' || name === 'subject')) {
+    if (
+      headers.has(name) &&
+      (name === 'from' || name === 'reply-to' || name === 'subject')
+    ) {
       throw new Error(`mail preview contains duplicate ${name} headers`);
     }
     if (!headers.has(name)) {
@@ -63,14 +76,40 @@ const sourceAddress = (value: string): string => {
   return email.parse(bracketed?.[1] ?? value);
 };
 
+const contactFormReplyAddress = (
+  preview: string,
+  sourceFrom: string,
+  sourceSubject: string,
+  trustedSenderIdentity: string | undefined,
+): string | undefined => {
+  if (
+    !trustedSenderIdentity ||
+    sourceFrom.toLowerCase() !== trustedSenderIdentity.toLowerCase() ||
+    sourceSubject !== MSC_CONTACT_FORM_SUBJECT
+  ) {
+    return undefined;
+  }
+  const body = preview.replaceAll('\r\n', '\n').split('\n\n', 2)[1] ?? '';
+  const candidates = body
+    .split('\n')
+    .map((line) => /^E-Mail:\s*(\S+)\s*$/.exec(line)?.[1])
+    .filter((value): value is string => value !== undefined);
+  if (candidates.length !== 1) {
+    throw new Error('MSC contact form must contain exactly one reply email');
+  }
+  return email.parse(candidates[0]);
+};
+
 /**
  * The installed read-only wrapper intentionally returns an RFC-style preview
- * string instead of a rich object. Only the bounded header block is parsed;
- * message bodies remain untrusted content and are never interpreted here.
+ * string instead of a rich object. Reply-To is preferred. The body remains
+ * untrusted except for one strictly bounded MSC contact-form reply-address
+ * field when From equals the configured account sender and the subject matches.
  */
 export const parseMailPreviewSource = (
   value: unknown,
   expectedMessageId: string,
+  options: ParseMailPreviewSourceOptions = {},
 ): ParsedMailPreviewSource => {
   if (typeof value !== 'string') {
     const parsed = structuredSource.parse(value);
@@ -79,19 +118,29 @@ export const parseMailPreviewSource = (
     }
     return {
       id: parsed.id,
-      from: parsed.from,
+      from: parsed.replyTo ?? parsed.from,
       subject: parsed.subject,
     };
   }
   const headers = headerBlock(value);
   const from = headers.get('from');
+  const replyTo = headers.get('reply-to');
   const sourceSubject = headers.get('subject');
   if (!from || !sourceSubject) {
     throw new Error('mail preview is missing From or Subject');
   }
+  const parsedFrom = sourceAddress(from);
+  const parsedSubject = subject.parse(sourceSubject);
   return {
     id: expectedMessageId,
-    from: sourceAddress(from),
-    subject: subject.parse(sourceSubject),
+    from: replyTo === undefined
+      ? contactFormReplyAddress(
+        value,
+        parsedFrom,
+        parsedSubject,
+        options.trustedSenderIdentity,
+      ) ?? parsedFrom
+      : sourceAddress(replyTo),
+    subject: parsedSubject,
   };
 };
