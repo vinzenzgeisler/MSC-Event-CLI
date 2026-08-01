@@ -14,6 +14,14 @@ SPEC.loader.exec_module(MODULE)
 
 
 class WrapperTests(unittest.TestCase):
+    def test_requests_only_support_read_scopes(self):
+        self.assertTrue(MODULE.SUPPORT_READ_SCOPES)
+        self.assertTrue(
+            all(scope.startswith("msc-support/") for scope in MODULE.SUPPORT_READ_SCOPES)
+        )
+        self.assertTrue(all(scope.endswith(".read") for scope in MODULE.SUPPORT_READ_SCOPES))
+        self.assertNotIn("msc-automation", " ".join(MODULE.SUPPORT_READ_SCOPES))
+
     def test_allows_only_narrow_read_commands(self):
         self.assertEqual(MODULE.command_args(["health"]), ["health"])
         self.assertEqual(MODULE.command_args(["lookup", "--email", "a@example.org"])[0], "lookup")

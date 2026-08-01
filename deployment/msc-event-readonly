@@ -39,6 +39,15 @@ ADMIN_QUERY_OPERATIONS = {
     "iam.roles",
     "iam.users",
 }
+SUPPORT_READ_SCOPES = (
+    "msc-support/dashboard.read",
+    "msc-support/entries.read",
+    "msc-support/entries.payment.read",
+    "msc-support/communication.read",
+    "msc-support/exports.read",
+    "msc-support/settings.read",
+    "msc-support/iam.read",
+)
 
 
 def fail(message: str, code: int = 4) -> None:
@@ -108,15 +117,7 @@ def runtime_env(source: dict[str, str]) -> dict[str, str]:
         "MSC_EVENT_COGNITO_URL": cognito_url,
         "MSC_EVENT_COGNITO_CLIENT_ID": client_id,
         "MSC_EVENT_COGNITO_CLIENT_SECRET_FILE": str(secret_path),
-        "MSC_EVENT_COGNITO_SCOPE": " ".join([
-            "msc-automation/dashboard.read",
-            "msc-automation/entries.read",
-            "msc-automation/entries.payment.read",
-            "msc-automation/communication.read",
-            "msc-automation/exports.read",
-            "msc-automation/settings.read",
-            "msc-automation/iam.read",
-        ]),
+        "MSC_EVENT_COGNITO_SCOPE": " ".join(SUPPORT_READ_SCOPES),
         "MSC_EVENT_TIMEOUT_MS": timeout,
     }
 
