@@ -80,6 +80,15 @@ class ContainerInstallTests(unittest.TestCase):
         self.assertIn("replySignature", source)
         self.assertIn("replyBccToSelf: account === 'msc-nennung'", source)
 
+    def test_installer_allowlists_event_mutation_tools(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertGreaterEqual(
+            source.count("'msc_event_entry_change_propose'"), 2
+        )
+        self.assertGreaterEqual(
+            source.count("'msc_event_entry_change_execute'"), 2
+        )
+
     def test_private_file_check_rejects_world_readable_mode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             private_file = Path(directory, "secret")

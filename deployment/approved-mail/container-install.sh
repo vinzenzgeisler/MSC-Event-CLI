@@ -271,7 +271,12 @@ if (Array.isArray(plugins.allow) && !plugins.allow.includes('msc-approved-mail')
 }
 const tools = config.tools ??= {};
 if (Array.isArray(tools.allow)) {
-  for (const tool of ['msc_mail_reply_propose', 'msc_mail_reply_send']) {
+  for (const tool of [
+    'msc_mail_reply_propose',
+    'msc_mail_reply_send',
+    'msc_event_entry_change_propose',
+    'msc_event_entry_change_execute',
+  ]) {
     if (!tools.allow.includes(tool)) tools.allow.push(tool);
   }
 } else {
@@ -280,6 +285,8 @@ if (Array.isArray(tools.allow)) {
     ...alsoAllow,
     'msc_mail_reply_propose',
     'msc_mail_reply_send',
+    'msc_event_entry_change_propose',
+    'msc_event_entry_change_execute',
   ])];
 }
 const temporary = `${path}.msc-approved-mail.${process.pid}.tmp`;
