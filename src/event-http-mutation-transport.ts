@@ -7,11 +7,12 @@ import type {
 
 type FetchLike = typeof fetch;
 type TokenProvider = (scope: string) => Promise<string>;
+export type EventMutationScopePrefix =
+  | 'msc-automation/'
+  | 'msc-support/';
 
 const uuid = z.string().uuid();
 const responseSchema = z.record(z.unknown());
-const scopePrefix = 'msc-automation/';
-
 type RequestSpec = {
   method: 'PATCH' | 'POST' | 'DELETE';
   path: string;
@@ -22,6 +23,7 @@ type RequestSpec = {
 const requestForOperation = (
   entryId: string,
   operation: EventEntryOperation,
+  scopePrefix: EventMutationScopePrefix,
 ): RequestSpec => {
   const id = encodeURIComponent(uuid.parse(entryId));
   switch (operation.type) {
@@ -126,17 +128,20 @@ export class EventEntryHttpMutationTransport implements
   readonly #token: TokenProvider;
   readonly #fetch: FetchLike;
   readonly #timeoutMs: number;
+  readonly #scopePrefix: EventMutationScopePrefix;
 
   constructor(options: {
     baseUrl: URL;
     tokenProvider: TokenProvider;
     timeoutMs?: number;
     fetchImpl?: FetchLike;
+    scopePrefix?: EventMutationScopePrefix;
   }) {
     this.#baseUrl = options.baseUrl;
     this.#token = options.tokenProvider;
     this.#fetch = options.fetchImpl ?? fetch;
     this.#timeoutMs = options.timeoutMs ?? 10_000;
+    this.#scopePrefix = options.scopePrefix ?? 'msc-automation/';
   }
 
   async apply(
@@ -144,7 +149,11 @@ export class EventEntryHttpMutationTransport implements
     operation: EventEntryOperation,
     context: ExecutionContext,
   ): Promise<{ externalId?: string; result: JsonValue }> {
-    const request = requestForOperation(entryId, operation);
+    const request = requestForOperation(
+      entryId,
+      operation,
+      this.#scopePrefix,
+    );
     const token = await this.#token(request.scope);
     const url = new URL(this.#baseUrl);
     url.pathname = `${url.pathname.replace(/\/$/, '')}${request.path}`;

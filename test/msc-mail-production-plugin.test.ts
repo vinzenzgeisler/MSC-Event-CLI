@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   createMailApprovalDescription,
   eventAutomationTokenEnv,
+  eventMutationAuthConfiguration,
   registerMscMailProductionPlugin,
   type MscMailProductionPluginApi,
 } from '../src/msc-mail-production-plugin.js';
@@ -28,6 +29,37 @@ test('uses only dedicated event automation credentials for mutations', () => {
     MSC_EVENT_COGNITO_CLIENT_ID: 'automation-client',
     MSC_EVENT_COGNITO_CLIENT_SECRET_FILE: '/run/secrets/automation',
   });
+});
+
+test('can explicitly reuse only the support client credentials for mutations', () => {
+  assert.deepEqual(eventMutationAuthConfiguration({
+    MSC_EVENT_MUTATION_AUTH_MODE: 'support',
+    MSC_EVENT_COGNITO_URL: 'https://auth.example.test',
+    MSC_EVENT_COGNITO_CLIENT_ID: 'support-client',
+    MSC_EVENT_COGNITO_CLIENT_SECRET_FILE: '/run/secrets/support',
+    MSC_EVENT_TOKEN: 'must-not-leak',
+    MSC_EVENT_AUTOMATION_COGNITO_CLIENT_ID: 'must-not-leak',
+  }), {
+    tokenEnv: {
+      MSC_EVENT_COGNITO_URL: 'https://auth.example.test',
+      MSC_EVENT_COGNITO_CLIENT_ID: 'support-client',
+      MSC_EVENT_COGNITO_CLIENT_SECRET_FILE: '/run/secrets/support',
+    },
+    scopePrefix: 'msc-support/',
+  });
+  assert.throws(
+    () => eventMutationAuthConfiguration({
+      MSC_EVENT_MUTATION_AUTH_MODE: 'support',
+      MSC_EVENT_COGNITO_CLIENT_ID: 'partial',
+    }),
+    /requires.*together/,
+  );
+  assert.throws(
+    () => eventMutationAuthConfiguration({
+      MSC_EVENT_MUTATION_AUTH_MODE: 'unknown',
+    }),
+    /must be unset or set to support/,
+  );
 });
 
 const fixture = (registrationMode = 'full') => {
