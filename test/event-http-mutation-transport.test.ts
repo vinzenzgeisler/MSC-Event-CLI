@@ -70,3 +70,25 @@ test('never exposes backend error bodies or retries a failed mutation', async ()
   );
   assert.equal(calls, 1);
 });
+
+test('can request the equivalent support scope explicitly', async () => {
+  let requestedScope = '';
+  const transport = new EventEntryHttpMutationTransport({
+    baseUrl: new URL('https://event.example'),
+    scopePrefix: 'msc-support/',
+    tokenProvider: async (scope) => {
+      requestedScope = scope;
+      return 'support-token';
+    },
+    fetchImpl: async () => new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+    }),
+  });
+
+  await transport.apply(entryId, {
+    type: 'payment-status',
+    paymentStatus: 'paid',
+  }, context);
+
+  assert.equal(requestedScope, 'msc-support/entries.payment.write');
+});
