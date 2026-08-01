@@ -64,7 +64,8 @@ export const loadCognitoClientConfig = (env: NodeJS.ProcessEnv = process.env): C
     );
   }
   const scope = env.MSC_EVENT_COGNITO_SCOPE?.trim() || 'msc-support/entries.read';
-  if (!/^[A-Za-z0-9._:/-]{1,256}$/.test(scope)) {
+  const oauthScope = /^[A-Za-z0-9._:/-]+(?: [A-Za-z0-9._:/-]+)*$/;
+  if (scope.length > 256 || !oauthScope.test(scope)) {
     throw new CliError('INVALID_COGNITO_SCOPE', 'Cognito scope is invalid.', EXIT.auth);
   }
   return {

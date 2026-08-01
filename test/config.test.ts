@@ -27,6 +27,20 @@ test('Cognito client config is complete and HTTPS-only', () => {
   assert.throws(() => loadCognitoClientConfig({ MSC_EVENT_COGNITO_URL: 'https://auth.example.org' }), /together/);
 });
 
+test('Cognito client config accepts space-delimited OAuth scopes', () => {
+  const base = {
+    MSC_EVENT_COGNITO_URL: 'https://auth.example.org',
+    MSC_EVENT_COGNITO_CLIENT_ID: 'client-id',
+    MSC_EVENT_COGNITO_CLIENT_SECRET_FILE: '/run/secrets/client-secret'
+  };
+  const scopes = 'msc-support/entries.read msc-support/entries.payment.read';
+  assert.equal(loadCognitoClientConfig({ ...base, MSC_EVENT_COGNITO_SCOPE: scopes })?.scope, scopes);
+  assert.throws(
+    () => loadCognitoClientConfig({ ...base, MSC_EVENT_COGNITO_SCOPE: 'msc-support/entries.read  msc-support/iam.read' }),
+    /scope is invalid/
+  );
+});
+
 test('token loads from environment without reading a file', async () => {
   let called = false;
   const token = await loadBearerToken({ MSC_EVENT_TOKEN: ' secret ' }, async () => {
