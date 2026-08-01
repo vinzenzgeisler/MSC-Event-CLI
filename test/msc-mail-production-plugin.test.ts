@@ -4,9 +4,31 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import test from 'node:test';
 import {
   createMailApprovalDescription,
+  eventAutomationTokenEnv,
   registerMscMailProductionPlugin,
   type MscMailProductionPluginApi,
 } from '../src/msc-mail-production-plugin.js';
+
+test('uses only dedicated event automation credentials for mutations', () => {
+  assert.equal(eventAutomationTokenEnv({}), undefined);
+  assert.throws(
+    () => eventAutomationTokenEnv({
+      MSC_EVENT_AUTOMATION_COGNITO_CLIENT_ID: 'partial',
+    }),
+    /together/,
+  );
+  assert.deepEqual(eventAutomationTokenEnv({
+    MSC_EVENT_AUTOMATION_COGNITO_URL: 'https://auth.example.test',
+    MSC_EVENT_AUTOMATION_COGNITO_CLIENT_ID: 'automation-client',
+    MSC_EVENT_AUTOMATION_COGNITO_CLIENT_SECRET_FILE: '/run/secrets/automation',
+    MSC_EVENT_COGNITO_CLIENT_ID: 'support-client',
+    MSC_EVENT_TOKEN: 'must-not-leak',
+  }), {
+    MSC_EVENT_COGNITO_URL: 'https://auth.example.test',
+    MSC_EVENT_COGNITO_CLIENT_ID: 'automation-client',
+    MSC_EVENT_COGNITO_CLIENT_SECRET_FILE: '/run/secrets/automation',
+  });
+});
 
 const fixture = (registrationMode = 'full') => {
   let route:
