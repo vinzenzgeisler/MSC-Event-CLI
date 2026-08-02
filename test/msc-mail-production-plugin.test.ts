@@ -164,7 +164,7 @@ test('registers all tools during tool discovery without runtime surfaces', () =>
   assert.equal(eventExecute?.name, 'msc_event_entry_change_execute');
 });
 
-test('renders a clear approval with BCC, exact body and signature', () => {
+test('renders a compact approval with only relevant mail information', () => {
   const description = createMailApprovalDescription({
     title: 'Auf MSC-E-Mail antworten',
     summary: 'Reply',
@@ -192,12 +192,38 @@ test('renders a clear approval with BCC, exact body and signature', () => {
     ],
   }, 'abcdef012345');
 
-  assert.match(description, /^Diese Antwort genau einmal senden/);
+  assert.match(description, /^Antwort freigeben/);
+  assert.match(description, /Absender: nennung@msc\.example/);
+  assert.match(description, /Empfänger: driver@example\.org/);
   assert.match(description, /BCC: nennung@msc\.example/);
-  assert.match(description, /Antworttext inkl\. Signatur/);
+  assert.match(description, /Betreff: Re: Frage/);
+  assert.match(description, /--- DAS KOMMT IN DIE MAIL ---\nGuten Tag,/);
   assert.match(description, /Mit freundlichen Grüßen\nVinzenz Geisler/);
-  assert.match(description, /SMTP-Preflight: erfolgreich/);
-  assert.match(description, /niemals automatisch wiederholt/);
+  assert.match(description, /--- ENDE MAIL ---/);
+  assert.match(description, /Begründung: Passende Antwort auf die eingegangene Anfrage\./);
+  assert.doesNotMatch(description, /Quellkonto|Quellnachricht|Prüfreferenz/);
+  assert.doesNotMatch(description, /SMTP|allow-once|abcdef012345|1173/);
+  assert.ok(description.length <= 511);
+});
+
+test('keeps long approval descriptions within the Telegram limit', () => {
+  const description = createMailApprovalDescription({
+    title: 'Auf MSC-E-Mail antworten',
+    summary: 'Reply',
+    target: 'driver@example.org',
+    risk: 'high',
+    changes: [
+      { field: 'Von', before: null, after: `${'sender'.repeat(20)}@example.org` },
+      { field: 'An', before: null, after: `${'recipient'.repeat(20)}@example.org` },
+      { field: 'BCC', before: null, after: `${'archive'.repeat(20)}@example.org` },
+      { field: 'Betreff', before: null, after: 'Langer Betreff '.repeat(20) },
+      { field: 'Antwort', before: null, after: 'Langer Inhalt '.repeat(200) },
+    ],
+  }, 'must-not-appear');
+
+  assert.equal(description.length, 511);
+  assert.match(description, /--- DAS KOMMT IN DIE MAIL ---\n.*…\n--- ENDE MAIL ---\n\nBegründung:/s);
+  assert.doesNotMatch(description, /must-not-appear/);
 });
 
 test('fails closed before service startup for HTTP and proposal execution', async () => {
