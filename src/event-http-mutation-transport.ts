@@ -16,7 +16,7 @@ const responseSchema = z.record(z.unknown());
 type RequestSpec = {
   method: 'PATCH' | 'POST' | 'DELETE';
   path: string;
-  scope: string;
+  scopes: readonly string[];
   body?: Record<string, unknown>;
 };
 
@@ -31,7 +31,7 @@ const requestForOperation = (
       return {
         method: 'PATCH',
         path: `/admin/entries/${id}/status`,
-        scope: `${scopePrefix}entries.status.write`,
+        scopes: [`${scopePrefix}entries.status.write`],
         body: {
           acceptanceStatus: operation.acceptanceStatus,
           sendLifecycleMail: false,
@@ -41,7 +41,7 @@ const requestForOperation = (
       return {
         method: 'PATCH',
         path: `/admin/entries/${id}/payment-amounts`,
-        scope: `${scopePrefix}entries.payment.write`,
+        scopes: [`${scopePrefix}entries.payment.write`],
         body: {
           ...(operation.totalCents === undefined
             ? {}
@@ -56,7 +56,7 @@ const requestForOperation = (
       return {
         method: 'PATCH',
         path: `/admin/entries/${id}/payment-status`,
-        scope: `${scopePrefix}entries.payment.write`,
+        scopes: [`${scopePrefix}entries.payment.write`],
         body: {
           paymentStatus: operation.paymentStatus,
           ...(operation.paidAt === undefined ? {} : { paidAt: operation.paidAt }),
@@ -67,21 +67,21 @@ const requestForOperation = (
       return {
         method: 'PATCH',
         path: `/admin/entries/${id}/tech-status`,
-        scope: `${scopePrefix}entries.checkin.write`,
+        scopes: [`${scopePrefix}entries.checkin.write`],
         body: { techStatus: operation.techStatus },
       };
     case 'checkin-id-verification':
       return {
         method: 'PATCH',
         path: `/admin/entries/${id}/checkin/id-verify`,
-        scope: `${scopePrefix}entries.checkin.write`,
+        scopes: [`${scopePrefix}entries.checkin.write`],
         body: { checkinIdVerified: operation.checkinIdVerified },
       };
     case 'notes':
       return {
         method: 'PATCH',
         path: `/admin/entries/${id}/notes`,
-        scope: `${scopePrefix}entries.notes.write`,
+        scopes: [`${scopePrefix}entries.notes.write`],
         body: {
           ...(operation.internalNote === undefined
             ? {}
@@ -98,25 +98,42 @@ const requestForOperation = (
       return {
         method: 'PATCH',
         path: `/admin/entries/${id}/class`,
-        scope: `${scopePrefix}entries.status.write`,
+        scopes: [`${scopePrefix}entries.status.write`],
         body: {
           classId: operation.classId,
           applyToBackupVehicle: operation.applyToBackupVehicle,
           allowVehicleTypeChange: operation.allowVehicleTypeChange,
         },
       };
+    case 'assignment':
+      return {
+        method: 'PATCH',
+        path: `/admin/entries/${id}/assignment`,
+        scopes: [
+          `${scopePrefix}entries.status.write`,
+          `${scopePrefix}communication.write`,
+        ],
+        body: {
+          classId: operation.classId,
+          startNumber: operation.startNumber,
+          applyToBackupVehicle: operation.applyToBackupVehicle,
+          allowVehicleTypeChange: operation.allowVehicleTypeChange,
+          sendSystemMail: true,
+          requestCodriverData: operation.requestCodriverData,
+        },
+      };
     case 'soft-delete':
       return {
         method: 'DELETE',
         path: `/admin/entries/${id}`,
-        scope: `${scopePrefix}entries.delete`,
+        scopes: [`${scopePrefix}entries.delete`],
         body: {},
       };
     case 'restore':
       return {
         method: 'POST',
         path: `/admin/entries/${id}/restore`,
-        scope: `${scopePrefix}entries.delete`,
+        scopes: [`${scopePrefix}entries.delete`],
         body: {},
       };
   }
@@ -154,7 +171,7 @@ export class EventEntryHttpMutationTransport implements
       operation,
       this.#scopePrefix,
     );
-    const token = await this.#token(request.scope);
+    const token = await this.#token(request.scopes.join(' '));
     const url = new URL(this.#baseUrl);
     url.pathname = `${url.pathname.replace(/\/$/, '')}${request.path}`;
     url.search = '';

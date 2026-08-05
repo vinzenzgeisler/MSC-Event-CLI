@@ -6,9 +6,72 @@ import {
   createMailApprovalDescription,
   eventAutomationTokenEnv,
   eventMutationAuthConfiguration,
+  OneTimeToolApprovalStore,
   registerMscMailProductionPlugin,
   type MscMailProductionPluginApi,
 } from '../src/msc-mail-production-plugin.js';
+import { parseOperatorSessionKeys } from '../src/msc-mail-production-config.js';
+
+test('operator session configuration accepts only Telegram and WebChat direct keys', () => {
+  const telegram = 'agent:main:telegram:direct:8261978945';
+  const webchat =
+    'agent:main:dashboard:a08cd2c0-a3db-4175-8069-2e6c1aee7842';
+  assert.deepEqual(parseOperatorSessionKeys([telegram, webchat]), [
+    telegram,
+    webchat,
+  ]);
+  for (const rejected of [
+    [telegram, 'agent:main:telegram:group:8261978945'],
+    [telegram, 'agent:main:dashboard:not-a-uuid'],
+    [webchat, telegram],
+    [telegram],
+    [telegram, webchat, 'agent:main:dashboard:extra'],
+  ]) {
+    assert.throws(() => parseOperatorSessionKeys(rejected));
+  }
+});
+
+test('one-time tool approval binds nonce, action, payload, call and expiry', () => {
+  let now = 1_000;
+  const store = new OneTimeToolApprovalStore(() => now);
+  const binding = {
+    actionId: '10000000-0000-4000-8000-000000000001',
+    payloadReference: 'abcdef012345',
+    sessionKey: 'agent:main:dashboard:a08cd2c0-a3db-4175-8069-2e6c1aee7842',
+    toolCallId: 'call-1',
+  };
+  store.authorize('nonce-1', binding, 1_000);
+  assert.equal(store.consume('nonce-1', {
+    actionId: binding.actionId,
+    payloadReference: '000000000000',
+    toolCallId: binding.toolCallId,
+  }), undefined);
+  assert.equal(store.consume('nonce-1', {
+    actionId: binding.actionId,
+    payloadReference: binding.payloadReference,
+    toolCallId: binding.toolCallId,
+  }), undefined, 'a payload mismatch burns the nonce');
+
+  store.authorize('nonce-2', binding, 1_000);
+  assert.deepEqual(store.consume('nonce-2', {
+    actionId: binding.actionId,
+    payloadReference: binding.payloadReference,
+    toolCallId: binding.toolCallId,
+  }), binding);
+  assert.equal(store.consume('nonce-2', {
+    actionId: binding.actionId,
+    payloadReference: binding.payloadReference,
+    toolCallId: binding.toolCallId,
+  }), undefined, 'an authorization cannot be replayed');
+
+  store.authorize('nonce-3', binding, 1_000);
+  now = 2_000;
+  assert.equal(store.consume('nonce-3', {
+    actionId: binding.actionId,
+    payloadReference: binding.payloadReference,
+    toolCallId: binding.toolCallId,
+  }), undefined, 'expired authorization is rejected');
+});
 
 test('uses only dedicated event automation credentials for mutations', () => {
   assert.equal(eventAutomationTokenEnv({}), undefined);
@@ -104,6 +167,12 @@ const fixture = (registrationMode = 'full') => {
   const eventExecute = tools.find(
     (tool) => tool.name === 'msc_event_entry_change_execute',
   );
+  const eventEntries = tools.find(
+    (tool) => tool.name === 'msc_event_entries_list',
+  );
+  const eventClasses = tools.find(
+    (tool) => tool.name === 'msc_event_classes_list',
+  );
   return {
     route,
     watch,
@@ -111,12 +180,14 @@ const fixture = (registrationMode = 'full') => {
     send,
     eventProposal,
     eventExecute,
+    eventEntries,
+    eventClasses,
     hook,
     service,
   };
 };
 
-test('registers one native gateway route, service and five MSC tools', () => {
+test('registers one native gateway route, service and seven MSC tools', () => {
   const {
     route,
     watch,
@@ -124,6 +195,8 @@ test('registers one native gateway route, service and five MSC tools', () => {
     send,
     eventProposal,
     eventExecute,
+    eventEntries,
+    eventClasses,
     hook,
     service,
   } = fixture();
@@ -142,6 +215,10 @@ test('registers one native gateway route, service and five MSC tools', () => {
   assert.equal(eventProposal?.name, 'msc_event_entry_change_propose');
   assert.match(eventProposal?.description ?? '', /never mutates/i);
   assert.equal(eventExecute?.name, 'msc_event_entry_change_execute');
+  assert.equal(eventEntries?.name, 'msc_event_entries_list');
+  assert.match(eventEntries?.description ?? '', /read-only/i);
+  assert.equal(eventClasses?.name, 'msc_event_classes_list');
+  assert.match(eventClasses?.description ?? '', /read-only/i);
   assert.equal(typeof hook, 'function');
 });
 
@@ -153,6 +230,8 @@ test('registers all tools during tool discovery without runtime surfaces', () =>
     send,
     eventProposal,
     eventExecute,
+    eventEntries,
+    eventClasses,
     service,
   } = fixture('tool-discovery');
   assert.equal(route, undefined);
@@ -162,6 +241,8 @@ test('registers all tools during tool discovery without runtime surfaces', () =>
   assert.equal(send?.name, 'msc_mail_reply_send');
   assert.equal(eventProposal?.name, 'msc_event_entry_change_propose');
   assert.equal(eventExecute?.name, 'msc_event_entry_change_execute');
+  assert.equal(eventEntries?.name, 'msc_event_entries_list');
+  assert.equal(eventClasses?.name, 'msc_event_classes_list');
 });
 
 test('renders a compact approval with only relevant mail information', () => {
@@ -226,8 +307,17 @@ test('keeps long approval descriptions within the Telegram limit', () => {
   assert.doesNotMatch(description, /must-not-appear/);
 });
 
-test('fails closed before service startup for HTTP and proposal execution', async () => {
-  const { route, proposal, send, eventProposal, eventExecute, hook } = fixture();
+test('fails closed before service startup for HTTP and tool execution', async () => {
+  const {
+    route,
+    proposal,
+    send,
+    eventProposal,
+    eventExecute,
+    eventEntries,
+    eventClasses,
+    hook,
+  } = fixture();
   const request = {
     headers: {},
     method: 'GET',
@@ -259,6 +349,27 @@ test('fails closed before service startup for HTTP and proposal execution', asyn
       idempotencyKey: 'reply-test-1',
     }),
     /service is not running/,
+  );
+  await assert.rejects(
+    eventEntries!.execute('call-read-1', {
+      eventId: '20000000-0000-4000-8000-000000000002',
+      acceptanceStatus: 'shortlist',
+      limit: 25,
+    }),
+    /read-only service is not running/,
+  );
+  await assert.rejects(
+    eventClasses!.execute('call-read-2', {
+      eventId: '20000000-0000-4000-8000-000000000002',
+    }),
+    /read-only service is not running/,
+  );
+  await assert.rejects(
+    eventEntries!.execute('call-read-3', {
+      eventId: '20000000-0000-4000-8000-000000000002',
+      path: '/admin/entries',
+    }),
+    /unrecognized key/i,
   );
   await assert.rejects(
     eventProposal!.execute('call-3', {

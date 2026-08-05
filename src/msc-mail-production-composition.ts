@@ -63,7 +63,7 @@ export interface MscMailProductionCompositionOptions {
   basePath: string;
   rpId: string;
   reviewerActor: string;
-  operatorSessionKey?: string;
+  operatorSessionKeys?: readonly [string, string];
   trustedProxyAddresses: string[];
   trustConfiguredActorWithoutHeader?: boolean;
   bindAddress: string;
@@ -114,11 +114,11 @@ export class MscMailProductionComposition {
   readonly eventCoordinator: ApprovedActionExecutionCoordinator | undefined;
   private closed = false;
   private readonly reviewerActor: string;
-  private readonly operatorSessionKey: string | undefined;
+  private readonly operatorSessionKeys: ReadonlySet<string>;
 
   constructor(options: MscMailProductionCompositionOptions) {
     this.reviewerActor = options.reviewerActor;
-    this.operatorSessionKey = options.operatorSessionKey;
+    this.operatorSessionKeys = new Set(options.operatorSessionKeys ?? []);
     this.review = new MscApprovalReviewComposition({
       stateDatabasePath: options.stateDatabasePath,
       encryptionKey: options.encryptionKey,
@@ -207,10 +207,8 @@ export class MscMailProductionComposition {
         this.review.http,
         this.review.queue,
       );
-      this.eventProvider = options.eventMutationTransport
-        ? new MscEventReadonlyProvider(options.eventProviderRunner)
-        : undefined;
-      this.eventProposals = this.eventProvider
+      this.eventProvider = new MscEventReadonlyProvider(options.eventProviderRunner);
+      this.eventProposals = options.eventMutationTransport
         ? new MscApprovalProposalWriter(
           this.eventProvider,
           this.provider,
@@ -219,7 +217,7 @@ export class MscMailProductionComposition {
           options.mailPolicy,
         )
         : undefined;
-      this.eventCoordinator = this.eventProvider && options.eventMutationTransport
+      this.eventCoordinator = options.eventMutationTransport
         ? new ApprovedActionExecutionCoordinator(this.review.queue, [
           new EventEntryChangeAdapter(
             (entryId) => this.eventProvider!.detail(entryId) as Promise<JsonValue>,
@@ -403,7 +401,7 @@ export class MscMailProductionComposition {
   }
 
   private assertGatewayOperatorSession(sessionKey: string): void {
-    if (!this.operatorSessionKey || sessionKey !== this.operatorSessionKey) {
+    if (!this.operatorSessionKeys.has(sessionKey)) {
       throw new Error('gateway operator approval is not enabled for this session');
     }
   }

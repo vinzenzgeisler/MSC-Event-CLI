@@ -13,6 +13,9 @@ import {
 } from './action.js';
 
 const entryIdSchema = z.string().uuid();
+const assignmentStartNumberSchema = z.string().regex(/^[A-Z0-9]{1,6}$/, {
+  message: 'startNumber must be normalized uppercase alphanumeric (1-6 characters)',
+});
 export const eventEntryOperationSchema = z.union([
   z.object({
     type: z.literal('acceptance-status'),
@@ -59,6 +62,15 @@ export const eventEntryOperationSchema = z.union([
     classId: z.string().uuid(),
     applyToBackupVehicle: z.boolean(),
     allowVehicleTypeChange: z.boolean(),
+  }).strict(),
+  z.object({
+    type: z.literal('assignment'),
+    classId: z.string().uuid(),
+    startNumber: assignmentStartNumberSchema,
+    applyToBackupVehicle: z.boolean(),
+    allowVehicleTypeChange: z.boolean(),
+    sendSystemMail: z.literal(true),
+    requestCodriverData: z.boolean(),
   }).strict(),
   z.object({
     type: z.literal('soft-delete'),
@@ -175,12 +187,34 @@ export class EventEntryChangePreviewRenderer implements
 
   render(value: EventEntryChangeIntent): ActionPreview {
     const intent = parseEventEntryChangeIntent(value);
+    const operation = intent.after.operation;
+    if (operation.type === 'assignment') {
+      const snapshot = intent.before.snapshot;
+      const before = typeof snapshot === 'object' &&
+        snapshot !== null && !Array.isArray(snapshot)
+        ? snapshot
+        : {};
+      return actionPreviewSchema.parse({
+        title: 'Nennung zuweisen',
+        summary: intent.summary,
+        target: intent.target.label ?? intent.target.id,
+        risk: 'high',
+        changes: [
+          { field: 'classId', before: before.classId ?? null, after: operation.classId },
+          { field: 'startNumber', before: before.startNumber ?? before.startNumberNorm ?? null, after: operation.startNumber },
+          { field: 'applyToBackupVehicle', before: null, after: operation.applyToBackupVehicle },
+          { field: 'allowVehicleTypeChange', before: null, after: operation.allowVehicleTypeChange },
+          { field: 'sendSystemMail', before: null, after: operation.sendSystemMail },
+          { field: 'requestCodriverData', before: null, after: operation.requestCodriverData },
+        ],
+      });
+    }
     return actionPreviewSchema.parse({
       title: 'Nennung ändern',
       summary: intent.summary,
       target: intent.target.label ?? intent.target.id,
       risk: 'high',
-      changes: Object.entries(intent.after.operation)
+      changes: Object.entries(operation)
         .filter(([field]) => field !== 'type')
         .map(([field, after]) => ({
           field,

@@ -19,6 +19,64 @@ const lookupKindSchema = z.enum([
   'start-number',
 ]);
 
+export const eventEntriesListInputSchema = z.object({
+  eventId: uuidSchema,
+  acceptanceStatus: z.enum([
+    'pending',
+    'shortlist',
+    'accepted',
+    'rejected',
+  ]).optional(),
+  classId: uuidSchema.optional(),
+  limit: z.number().int().min(1).max(100).default(25),
+  cursor: z.string().trim().min(1).max(2048)
+    .refine((value) => !/[\r\n\0]/.test(value), 'invalid cursor')
+    .optional(),
+}).strict();
+
+export const eventClassesListInputSchema = z.object({
+  eventId: uuidSchema,
+}).strict();
+
+export type EventEntriesListInput = z.infer<typeof eventEntriesListInputSchema>;
+export type EventClassesListInput = z.infer<typeof eventClassesListInputSchema>;
+
+const compactEntryListResponseSchema = z.object({
+  ok: z.boolean().optional(),
+  entries: z.array(z.record(z.unknown())),
+  meta: z.object({
+    hasMore: z.boolean().optional(),
+    nextCursor: z.string().nullable().optional(),
+    limit: z.number().int().optional(),
+  }).strip().optional(),
+}).passthrough();
+
+const compactEntryFields = [
+  'id',
+  'eventId',
+  'classId',
+  'className',
+  'acceptanceStatus',
+  'startNumberNorm',
+  'driverFirstName',
+  'driverLastName',
+  'vehicleLabel',
+] as const;
+
+export const compactEventEntriesList = (value: unknown): Record<string, unknown> => {
+  const parsed = compactEntryListResponseSchema.parse(value);
+  return {
+    ...(parsed.ok === undefined ? {} : { ok: parsed.ok }),
+    entries: parsed.entries.map((entry) => Object.fromEntries(
+      compactEntryFields.flatMap((field) => {
+        const fieldValue = entry[field];
+        return fieldValue === undefined ? [] : [[field, fieldValue]];
+      }),
+    )),
+    ...(parsed.meta === undefined ? {} : { meta: parsed.meta }),
+  };
+};
+
 export type MscEventReadonlyRunner = (
   args: readonly string[],
 ) => Promise<{ stdout: string }>;
@@ -56,6 +114,16 @@ export class MscEventReadonlyProvider {
   detail(idValue: string): Promise<unknown> {
     const id = uuidSchema.parse(idValue);
     return this.invoke(['detail', '--id', id]);
+  }
+
+  listEntries(inputValue: EventEntriesListInput): Promise<unknown> {
+    const input = eventEntriesListInputSchema.parse(inputValue);
+    return this.query('entries.list', input);
+  }
+
+  listClasses(inputValue: EventClassesListInput): Promise<unknown> {
+    const input = eventClassesListInputSchema.parse(inputValue);
+    return this.query('events.classes', { id: input.eventId });
   }
 
   query(

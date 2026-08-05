@@ -9,6 +9,8 @@
   "contracts": {
     "tools": [
       "msc_mail_watch_list",
+      "msc_event_entries_list",
+      "msc_event_classes_list",
       "msc_mail_reply_propose",
       "msc_mail_reply_send",
       "msc_event_entry_change_propose",
@@ -17,6 +19,12 @@
   },
   "toolMetadata": {
     "msc_mail_watch_list": {
+      "optional": true
+    },
+    "msc_event_entries_list": {
+      "optional": true
+    },
+    "msc_event_classes_list": {
       "optional": true
     },
     "msc_mail_reply_propose": {

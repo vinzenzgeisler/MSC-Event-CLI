@@ -10,8 +10,8 @@ and a post-write reread.
 
 | Domain | Read | Typed writes | Status |
 | --- | --- | --- | --- |
-| Registrations | Search, list, detail, deleted entries | Acceptance status, payment amounts/status, technical status, ID verification, notes, class, soft-delete, restore | Implemented; activation pending |
-| Events and classes | Admin API query coverage | None | Contract required |
+| Registrations | Narrow typed entry list plus detail lookup | Acceptance status, payment amounts/status, technical status, ID verification, notes, class, atomic class/start-number assignment, soft-delete, restore | Implemented; activation pending |
+| Events and classes | Narrow typed class list for one event | None | Read implemented; write contract required |
 | Pricing and invoices | Admin API query coverage | Entry payment fields only | Contract required |
 | Documents and exports | Admin API query coverage | None | Contract required |
 | Communication | Mailbox plus event outbox/template queries | MSC mailbox reply only | Event-mail contracts required |
@@ -21,7 +21,21 @@ and a post-write reread.
 | Signing | Admin API query coverage | None | External-side-effect contract required |
 
 The backend currently exposes 54 protected administrative mutation routes. The
-first production slice covers the nine registration operation variants above.
+first production slice covers the registration operation variants above. The
+atomic `assignment` operation is fixed to
+`PATCH /admin/entries/{entryId}/assignment`, requires both
+`entries.status.write` and `communication.write`, and requires
+`sendSystemMail: true`. Consequently every approved assignment queues the one
+backend system mail; `requestCodriverData` is a separate explicit approved
+flag.
+
+Native execution approval is available only from two configured direct
+sessions belonging to Vinzenz: the existing Telegram direct chat and one exact
+authenticated OpenClaw WebChat dashboard conversation. Group chats, other
+dashboard sessions, and unknown session keys fail closed. An allow-once
+decision creates a 60-second nonce bound to the session, tool call, action ID,
+and payload reference; mismatches consume the nonce, and successful nonces
+cannot be replayed.
 The remaining routes must not be exposed through a generic URL, method, JSON,
 SQL, or table-name parameter.
 
@@ -60,8 +74,14 @@ specific maintenance action, but never grant a general database console.
 
 ## Activation boundary
 
+The OpenClaw plugin exposes only `msc_event_entries_list` (typed `eventId`,
+`acceptanceStatus`, `classId`, `limit`, and `cursor`) and
+`msc_event_classes_list` (one typed `eventId`) for shortlist discovery. Neither
+tool accepts a URL, path, method, SQL statement, headers, or JSON body. The
+deployment wrapper admits only their `entries.list` and `events.classes`
+admin-query operations.
+
 Read access uses the existing `msc-support` client. Mutation execution requires
 a separate `msc-automation` Cognito client and secret. The plugin refuses to
 construct a mutation transport from support credentials or a bearer token.
 Partial automation credential configuration fails closed.
-

@@ -48,6 +48,15 @@ test('covers the documented entry mutation set with strict typed payloads', () =
       applyToBackupVehicle: true,
       allowVehicleTypeChange: false,
     },
+    {
+      type: 'assignment',
+      classId: '30000000-0000-4000-8000-000000000003',
+      startNumber: 'A17',
+      applyToBackupVehicle: true,
+      allowVehicleTypeChange: false,
+      sendSystemMail: true,
+      requestCodriverData: true,
+    },
     { type: 'soft-delete' },
     { type: 'restore' },
   ] as const;
@@ -67,6 +76,62 @@ test('covers the documented entry mutation set with strict typed payloads', () =
       arbitrary: true,
     } as never,
   }));
+});
+
+test('assignment is strict, normalized and previews only assignment fields', () => {
+  const intent = createEventEntryChangeIntent({
+    entryId,
+    label: 'Shortlist entry',
+    currentSnapshot: {
+      classId: '40000000-0000-4000-8000-000000000004',
+      startNumber: 'B2',
+      driverEmail: 'must-not-appear@example.org',
+    },
+    operation: {
+      type: 'assignment',
+      classId: '30000000-0000-4000-8000-000000000003',
+      startNumber: 'A17',
+      applyToBackupVehicle: true,
+      allowVehicleTypeChange: false,
+      sendSystemMail: true,
+      requestCodriverData: true,
+    },
+  });
+  assert.deepEqual(new EventEntryChangePreviewRenderer().render(intent).changes, [
+    {
+      field: 'classId',
+      before: '40000000-0000-4000-8000-000000000004',
+      after: '30000000-0000-4000-8000-000000000003',
+    },
+    { field: 'startNumber', before: 'B2', after: 'A17' },
+    { field: 'applyToBackupVehicle', before: null, after: true },
+    { field: 'allowVehicleTypeChange', before: null, after: false },
+    { field: 'sendSystemMail', before: null, after: true },
+    { field: 'requestCodriverData', before: null, after: true },
+  ]);
+
+  const assignment = {
+    type: 'assignment',
+    classId: '30000000-0000-4000-8000-000000000003',
+    startNumber: 'A17',
+    applyToBackupVehicle: true,
+    allowVehicleTypeChange: false,
+    sendSystemMail: true,
+    requestCodriverData: true,
+  } as const;
+  for (const operation of [
+    { ...assignment, sendSystemMail: false },
+    { ...assignment, startNumber: 'a17' },
+    { ...assignment, startNumber: 'A-17' },
+    { ...assignment, startNumber: 'ABCDEFG' },
+    { ...assignment, arbitrary: true },
+  ]) {
+    assert.throws(() => createEventEntryChangeIntent({
+      entryId,
+      currentSnapshot: snapshot,
+      operation: operation as never,
+    }));
+  }
 });
 
 test('rejects hidden fields, target substitution and lifecycle mail side effects', () => {

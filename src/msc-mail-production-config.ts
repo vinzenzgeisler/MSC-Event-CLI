@@ -34,6 +34,24 @@ const exactHttpsOrigin = z.string().url().superRefine((value, context) => {
 const absolutePath = z.string().min(1).refine(isAbsolute, 'absolute path required');
 const email = z.string().trim().email().max(320);
 const account = z.enum(['msc-nennung', 'msc-info', 'msc-vorstand']);
+const telegramDirectSessionKey = z.string().trim().regex(
+  /^agent:[a-zA-Z0-9_-]+:telegram:direct:[0-9]+$/,
+  'expected one exact Telegram direct-chat session key',
+);
+const webchatDirectSessionKey = z.string().trim().regex(
+  /^agent:[a-zA-Z0-9_-]+:dashboard:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  'expected one exact authenticated WebChat dashboard session key',
+);
+const operatorSessionKeys = z.tuple([
+  telegramDirectSessionKey,
+  webchatDirectSessionKey,
+]).refine(
+  ([telegram, webchat]) => telegram !== webchat,
+  'operator sessions must be distinct',
+);
+export const parseOperatorSessionKeys = (
+  value: unknown,
+): readonly [string, string] => operatorSessionKeys.parse(value);
 const configSchema = z.object({
   version: z.literal(1),
   stateDatabasePath: absolutePath,
@@ -44,10 +62,7 @@ const configSchema = z.object({
   basePath: z.string().regex(/^\/[a-z0-9][a-z0-9._~-]*$/),
   rpId: z.string().trim().min(1).max(253),
   reviewerActor: z.string().trim().min(1).max(128),
-  operatorSessionKey: z.string().trim().regex(
-    /^agent:[a-zA-Z0-9_-]+:telegram:direct:[0-9]+$/,
-    'operator session must be one exact Telegram direct-chat session key',
-  ).max(500).optional(),
+  operatorSessionKeys: operatorSessionKeys.optional(),
   trustedProxyAddresses: z.array(z.string().refine(
     (value) => isIP(value) > 0,
     'trusted proxy must be an exact IP',
@@ -153,9 +168,9 @@ export const loadMscMailProductionOptions = async (
     basePath: config.basePath,
     rpId: config.rpId,
     reviewerActor: config.reviewerActor,
-    ...(config.operatorSessionKey === undefined
+    ...(config.operatorSessionKeys === undefined
       ? {}
-      : { operatorSessionKey: config.operatorSessionKey }),
+      : { operatorSessionKeys: config.operatorSessionKeys }),
     trustedProxyAddresses: config.trustedProxyAddresses,
     trustConfiguredActorWithoutHeader:
       config.trustConfiguredActorWithoutHeader,

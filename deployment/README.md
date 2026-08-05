@@ -1,15 +1,16 @@
 # OpenClaw deployment
 
 This package exposes the CLI to OpenClaw through `/usr/local/bin/msc-event-readonly`.
-The wrapper permits only compact read operations, including exact
-`--codriver-name` lookup, and rejects `--full`, custom
-base URLs, legacy bearer tokens and every command outside its fixed allowlist.
+The wrapper permits only compact lookup/detail operations plus the exact typed
+`entries.list` and `events.classes` admin queries needed by the OpenClaw tools.
+It rejects `--full`, custom base URLs, legacy bearer tokens and every command
+outside its fixed allowlist.
 
 ## Production values
 
 - API: `https://j3w759az4f.execute-api.eu-central-1.amazonaws.com`
 - Cognito hosted domain: `https://dreiecksrennen-prod-auth-330221.auth.eu-central-1.amazoncognito.com`
-- OAuth scope: `msc-support/entries.read`
+- OAuth scopes: `msc-support/entries.read msc-support/settings.read`
 
 The existing browser client `686klq4439v73rdutvufgj8kua` is intentionally not
 used. Deploy the backend machine-client change first and use its

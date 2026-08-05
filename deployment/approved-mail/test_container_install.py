@@ -43,7 +43,16 @@ class ContainerInstallTests(unittest.TestCase):
         self.assertIn("msc_mail_reply_propose", source)
         self.assertIn("msc_mail_reply_send", source)
         self.assertIn("MSC_APPROVED_MAIL_OPERATOR_SESSION_KEY", source)
+        self.assertIn("MSC_APPROVED_MAIL_OPERATOR_WEBCHAT_SESSION_KEY", source)
         self.assertIn("agent:main:telegram:direct:8261978945", source)
+        self.assertIn(
+            "agent:main:dashboard:a08cd2c0-a3db-4175-8069-2e6c1aee7842",
+            source,
+        )
+        self.assertIn(
+            "operatorSessionKeys: [operatorSessionKey, operatorWebchatSessionKey]",
+            source,
+        )
         self.assertIn('rmdir -- "$STAGING_ROOT"', source)
 
     def test_native_plugin_manifest_declares_all_optional_tools(self) -> None:
@@ -58,6 +67,8 @@ class ContainerInstallTests(unittest.TestCase):
             manifest["contracts"]["tools"],
             [
                 "msc_mail_watch_list",
+                "msc_event_entries_list",
+                "msc_event_classes_list",
                 "msc_mail_reply_propose",
                 "msc_mail_reply_send",
                 "msc_event_entry_change_propose",
@@ -65,6 +76,8 @@ class ContainerInstallTests(unittest.TestCase):
             ],
         )
         self.assertTrue(manifest["toolMetadata"]["msc_mail_watch_list"]["optional"])
+        self.assertTrue(manifest["toolMetadata"]["msc_event_entries_list"]["optional"])
+        self.assertTrue(manifest["toolMetadata"]["msc_event_classes_list"]["optional"])
         self.assertTrue(manifest["toolMetadata"]["msc_mail_reply_propose"]["optional"])
         self.assertTrue(manifest["toolMetadata"]["msc_mail_reply_send"]["optional"])
         self.assertTrue(
@@ -88,6 +101,8 @@ class ContainerInstallTests(unittest.TestCase):
         self.assertGreaterEqual(
             source.count("'msc_event_entry_change_execute'"), 2
         )
+        self.assertGreaterEqual(source.count("'msc_event_entries_list'"), 2)
+        self.assertGreaterEqual(source.count("'msc_event_classes_list'"), 2)
 
     def test_private_file_check_rejects_world_readable_mode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
