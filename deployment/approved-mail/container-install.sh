@@ -16,6 +16,7 @@ readonly PRODUCTION_CONFIG="${CONFIG_ROOT}/production.json"
 readonly BOOTSTRAP_CONFIG="${CONFIG_ROOT}/bootstrap.json"
 readonly PUBLIC_ORIGIN="${MSC_APPROVED_MAIL_PUBLIC_ORIGIN:-https://openclaw.vinzenz-geisler.com}"
 readonly OPERATOR_SESSION_KEY="${MSC_APPROVED_MAIL_OPERATOR_SESSION_KEY:-agent:main:telegram:direct:8261978945}"
+readonly OPERATOR_WEBCHAT_SESSION_KEY="${MSC_APPROVED_MAIL_OPERATOR_WEBCHAT_SESSION_KEY:-agent:main:dashboard:a08cd2c0-a3db-4175-8069-2e6c1aee7842}"
 readonly PUBLIC_BASE_PATH="/msc-approval"
 readonly RUNTIME_UID="$(id -u)"
 readonly RUNTIME_GID="$(id -g)"
@@ -148,6 +149,7 @@ write_configuration() {
     "$BOOTSTRAP_CONFIG" \
     "$PUBLIC_ORIGIN" \
     "$OPERATOR_SESSION_KEY" \
+    "$OPERATOR_WEBCHAT_SESSION_KEY" \
     "$trusted_proxy_ip" \
     "$STATE_ROOT" \
     "$CONFIG_ROOT" \
@@ -158,6 +160,7 @@ const [
   bootstrapPath,
   publicOrigin,
   operatorSessionKey,
+  operatorWebchatSessionKey,
   trustedProxy,
   stateRoot,
   configRoot,
@@ -206,7 +209,7 @@ const production = {
   basePath: '/msc-approval',
   rpId: new URL(publicOrigin).hostname,
   reviewerActor: 'vinzenz',
-  operatorSessionKey,
+  operatorSessionKeys: [operatorSessionKey, operatorWebchatSessionKey],
   trustedProxyAddresses: [trustedProxy],
   trustConfiguredActorWithoutHeader: true,
   bindInterface: 'eth0',
@@ -274,6 +277,8 @@ if (Array.isArray(tools.allow)) {
   for (const tool of [
     'msc_mail_reply_propose',
     'msc_mail_reply_send',
+    'msc_event_entries_list',
+    'msc_event_classes_list',
     'msc_event_entry_change_propose',
     'msc_event_entry_change_execute',
   ]) {
@@ -285,6 +290,8 @@ if (Array.isArray(tools.allow)) {
     ...alsoAllow,
     'msc_mail_reply_propose',
     'msc_mail_reply_send',
+    'msc_event_entries_list',
+    'msc_event_classes_list',
     'msc_event_entry_change_propose',
     'msc_event_entry_change_execute',
   ])];
@@ -309,8 +316,8 @@ main() {
   write_configuration
   activate_files_and_config
   printf '\nMSC-Mail-Paket ist containerintern vorbereitet.\n'
-  printf 'Mailversand: separate OpenClaw-Freigabe im Telegram-Direktchat %s\n' \
-    "$OPERATOR_SESSION_KEY"
+  printf 'Freigaben: exakte OpenClaw-Direktsitzungen %s und %s\n' \
+    "$OPERATOR_SESSION_KEY" "$OPERATOR_WEBCHAT_SESSION_KEY"
   printf 'Konfigurationsbackup: %s\n' "$CONFIG_BACKUP"
 }
 

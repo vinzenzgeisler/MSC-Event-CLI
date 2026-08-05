@@ -13,6 +13,11 @@ import {
 } from './event-approved-action.js';
 import { EventEntryHttpMutationTransport } from './event-http-mutation-transport.js';
 import type { EventMutationScopePrefix } from './event-http-mutation-transport.js';
+import {
+  compactEventEntriesList,
+  eventClassesListInputSchema,
+  eventEntriesListInputSchema,
+} from './event-readonly-provider.js';
 import { MscMailProductionComposition } from './msc-mail-production-composition.js';
 import { loadMscMailProductionOptions } from './msc-mail-production-config.js';
 
@@ -137,10 +142,74 @@ type EventExecuteTool = {
   execute(id: string, params: Record<string, unknown>): Promise<ToolResult>;
 };
 
+type EventEntriesListTool = {
+  name: 'msc_event_entries_list';
+  description: string;
+  parameters: Record<string, unknown>;
+  execute(id: string, params: Record<string, unknown>): Promise<ToolResult>;
+};
+
+type EventClassesListTool = {
+  name: 'msc_event_classes_list';
+  description: string;
+  parameters: Record<string, unknown>;
+  execute(id: string, params: Record<string, unknown>): Promise<ToolResult>;
+};
+
 const APPROVAL_BASE_PATH = '/msc-approval';
 const SEND_TOOL_NAME = 'msc_mail_reply_send';
 const EVENT_EXECUTE_TOOL_NAME = 'msc_event_entry_change_execute';
 const AUTHORIZATION_NONCE_PARAM = 'operatorApprovalNonce';
+
+type ApprovedToolCallBinding = {
+  actionId: string;
+  payloadReference: string;
+  sessionKey: string;
+  toolCallId: string;
+};
+
+export class OneTimeToolApprovalStore {
+  readonly #approved = new Map<string, ApprovedToolCallBinding & {
+    expiresAtMs: number;
+  }>();
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  authorize(
+    nonce: string,
+    binding: ApprovedToolCallBinding,
+    ttlMs = 60_000,
+  ): void {
+    if (ttlMs <= 0) throw new Error('approval TTL must be positive');
+    this.#approved.set(nonce, {
+      ...binding,
+      expiresAtMs: this.now() + ttlMs,
+    });
+  }
+
+  consume(
+    nonce: string,
+    expected: Pick<
+      ApprovedToolCallBinding,
+      'actionId' | 'payloadReference' | 'toolCallId'
+    >,
+  ): ApprovedToolCallBinding | undefined {
+    const authorization = this.#approved.get(nonce);
+    this.#approved.delete(nonce);
+    if (!authorization || authorization.expiresAtMs <= this.now() ||
+        authorization.actionId !== expected.actionId ||
+        authorization.payloadReference !== expected.payloadReference ||
+        authorization.toolCallId !== expected.toolCallId) {
+      return undefined;
+    }
+    return {
+      actionId: authorization.actionId,
+      payloadReference: authorization.payloadReference,
+      sessionKey: authorization.sessionKey,
+      toolCallId: authorization.toolCallId,
+    };
+  }
+}
 
 export interface MscMailProductionPluginApi {
   registrationMode?: string;
@@ -158,6 +227,8 @@ export interface MscMailProductionPluginApi {
       | ReplyProposalTool
       | ReplySendTool
       | MailWatchTool
+      | EventEntriesListTool
+      | EventClassesListTool
       | EventProposalTool
       | EventExecuteTool,
     options: { optional: true },
@@ -333,20 +404,8 @@ export const registerMscMailProductionPlugin = (
   api: MscMailProductionPluginApi,
 ): void => {
   let composition: MscMailProductionComposition | undefined;
-  const approvedCalls = new Map<string, {
-    actionId: string;
-    payloadReference: string;
-    sessionKey: string;
-    toolCallId: string;
-    expiresAtMs: number;
-  }>();
-  const approvedEventCalls = new Map<string, {
-    actionId: string;
-    payloadReference: string;
-    sessionKey: string;
-    toolCallId: string;
-    expiresAtMs: number;
-  }>();
+  const approvedCalls = new OneTimeToolApprovalStore();
+  const approvedEventCalls = new OneTimeToolApprovalStore();
 
   api.registerTool({
     name: 'msc_mail_watch_list',
@@ -379,6 +438,73 @@ export const registerMscMailProductionPlugin = (
         readOnly: true,
         folder: 'INBOX',
         accounts,
+      };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(details) }],
+        details,
+      };
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: 'msc_event_entries_list',
+    description:
+      'List MSC event registrations through the fixed read-only entries query. Filters are limited to event, acceptance status, class and bounded pagination.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['eventId'],
+      properties: {
+        eventId: { type: 'string', format: 'uuid' },
+        acceptanceStatus: {
+          type: 'string',
+          enum: ['pending', 'shortlist', 'accepted', 'rejected'],
+        },
+        classId: { type: 'string', format: 'uuid' },
+        limit: { type: 'integer', minimum: 1, maximum: 100, default: 25 },
+        cursor: { type: 'string', minLength: 1, maxLength: 2_048 },
+      },
+    },
+    async execute(_id, params) {
+      const input = eventEntriesListInputSchema.parse(params);
+      if (!composition?.eventProvider) {
+        throw new Error('MSC event read-only service is not running');
+      }
+      const details = {
+        readOnly: true,
+        operation: 'entries.list',
+        result: compactEventEntriesList(
+          await composition.eventProvider.listEntries(input),
+        ),
+      };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(details) }],
+        details,
+      };
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: 'msc_event_classes_list',
+    description:
+      'List classes for one MSC event through the fixed read-only event-classes query.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['eventId'],
+      properties: {
+        eventId: { type: 'string', format: 'uuid' },
+      },
+    },
+    async execute(_id, params) {
+      const input = eventClassesListInputSchema.parse(params);
+      if (!composition?.eventProvider) {
+        throw new Error('MSC event read-only service is not running');
+      }
+      const details = {
+        readOnly: true,
+        operation: 'events.classes',
+        result: await composition.eventProvider.listClasses(input),
       };
       return {
         content: [{ type: 'text', text: JSON.stringify(details) }],
@@ -458,15 +584,15 @@ export const registerMscMailProductionPlugin = (
       if (!input.operatorApprovalNonce) {
         throw new Error('operator approval is missing');
       }
-      const authorization = approvedEventCalls.get(
+      const authorization = approvedEventCalls.consume(
         input.operatorApprovalNonce,
+        {
+          actionId: input.actionId,
+          payloadReference: input.payloadReference,
+          toolCallId: id,
+        },
       );
-      approvedEventCalls.delete(input.operatorApprovalNonce);
-      if (!authorization ||
-          authorization.expiresAtMs <= Date.now() ||
-          authorization.actionId !== input.actionId ||
-          authorization.payloadReference !== input.payloadReference ||
-          authorization.toolCallId !== id) {
+      if (!authorization) {
         throw new Error(
           'operator approval is missing or does not match this tool call',
         );
@@ -553,7 +679,7 @@ export const registerMscMailProductionPlugin = (
   api.registerTool({
     name: SEND_TOOL_NAME,
     description:
-      'Send one existing encrypted MSC mail proposal. OpenClaw blocks this tool until Vinzenz explicitly approves this exact call in the authorized Telegram direct chat.',
+      'Send one existing encrypted MSC mail proposal. OpenClaw blocks this tool until Vinzenz explicitly approves this exact call in an authorized direct session.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -579,13 +705,15 @@ export const registerMscMailProductionPlugin = (
       if (!input.operatorApprovalNonce) {
         throw new Error('operator approval is missing');
       }
-      const authorization = approvedCalls.get(input.operatorApprovalNonce);
-      approvedCalls.delete(input.operatorApprovalNonce);
-      if (!authorization ||
-          authorization.expiresAtMs <= Date.now() ||
-          authorization.actionId !== input.actionId ||
-          authorization.payloadReference !== input.payloadReference ||
-          authorization.toolCallId !== id) {
+      const authorization = approvedCalls.consume(
+        input.operatorApprovalNonce,
+        {
+          actionId: input.actionId,
+          payloadReference: input.payloadReference,
+          toolCallId: id,
+        },
+      );
+      if (!authorization) {
         throw new Error('operator approval is missing or does not match this tool call');
       }
       const result = await composition.approveAndDispatchFromGateway({
@@ -669,12 +797,11 @@ export const registerMscMailProductionPlugin = (
           timeoutMs: 600_000,
           onResolution(decision) {
             if (decision !== 'allow-once') return;
-            approvedEventCalls.set(nonce, {
+            approvedEventCalls.authorize(nonce, {
               actionId: parsed.data.actionId,
               payloadReference: parsed.data.payloadReference,
               sessionKey,
               toolCallId,
-              expiresAtMs: Date.now() + 60_000,
             });
           },
         },
@@ -736,12 +863,11 @@ export const registerMscMailProductionPlugin = (
         timeoutMs: 600_000,
         onResolution(decision) {
           if (decision !== 'allow-once') return;
-          approvedCalls.set(nonce, {
+          approvedCalls.authorize(nonce, {
             actionId: parsed.data.actionId,
             payloadReference: parsed.data.payloadReference,
             sessionKey,
             toolCallId,
-            expiresAtMs: Date.now() + 60_000,
           });
         },
       },

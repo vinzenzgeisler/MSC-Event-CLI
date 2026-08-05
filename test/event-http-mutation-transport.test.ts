@@ -33,6 +33,15 @@ test('maps each typed entry operation to one fixed scoped backend request', asyn
     checkinIdVerified: true,
   }, context);
   await transport.apply(entryId, { type: 'soft-delete' }, context);
+  await transport.apply(entryId, {
+    type: 'assignment',
+    classId: '30000000-0000-4000-8000-000000000003',
+    startNumber: 'A17',
+    applyToBackupVehicle: true,
+    allowVehicleTypeChange: false,
+    sendSystemMail: true,
+    requestCodriverData: true,
+  }, context);
 
   assert.equal(
     requests[0]?.url,
@@ -46,6 +55,29 @@ test('maps each typed entry operation to one fixed scoped backend request', asyn
   );
   assert.equal(requests[1]?.init.method, 'DELETE');
   assert.equal(requests[1]?.scope, 'msc-automation/entries.delete');
+  assert.equal(
+    requests[2]?.url,
+    `https://event.example/prod/admin/entries/${entryId}/assignment`,
+  );
+  assert.equal(
+    requests[2]?.scope,
+    'msc-automation/entries.status.write msc-automation/communication.write',
+  );
+  assert.equal(requests[2]?.init.method, 'PATCH');
+  assert.deepEqual(JSON.parse(String(requests[2]?.init.body)), {
+    classId: '30000000-0000-4000-8000-000000000003',
+    startNumber: 'A17',
+    applyToBackupVehicle: true,
+    allowVehicleTypeChange: false,
+    sendSystemMail: true,
+    requestCodriverData: true,
+  });
+  const assignmentHeaders = requests[2]?.init.headers as Record<string, string>;
+  assert.equal(assignmentHeaders['x-msc-approval-action-id'], context.actionId);
+  assert.equal(
+    assignmentHeaders['x-msc-approval-payload-sha256'],
+    context.payloadHash,
+  );
 });
 
 test('never exposes backend error bodies or retries a failed mutation', async () => {

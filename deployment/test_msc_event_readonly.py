@@ -43,6 +43,16 @@ class WrapperTests(unittest.TestCase):
             ])[0],
             "admin-query",
         )
+        self.assertEqual(
+            MODULE.command_args([
+                "admin-query",
+                "--operation",
+                "events.classes",
+                "--params-json",
+                '{"id":"00000000-0000-4000-8000-000000000000"}',
+            ])[0],
+            "admin-query",
+        )
 
     def test_rejects_full_arbitrary_and_write_like_commands(self):
         rejected = [
@@ -54,6 +64,11 @@ class WrapperTests(unittest.TestCase):
             ["admin-query", "--operation", "arbitrary.http", "--params-json", "{}"],
             ["admin-query", "--operation", "entries.list", "--params-json", "[]"],
             ["admin-query", "--operation", "entries.list", "--params-json", "{broken"],
+            ["admin-query", "--operation", "events.list", "--params-json", "{}"],
+            ["admin-query", "--operation", "entries.get", "--params-json", '{"id":"00000000-0000-4000-8000-000000000000"}'],
+            ["admin-query", "--operation", "entries.list", "--params-json", '{"eventId":"00000000-0000-4000-8000-000000000000","url":"https://evil.example"}'],
+            ["admin-query", "--operation", "entries.list", "--params-json", '{"eventId":"00000000-0000-4000-8000-000000000000","acceptanceStatus":"anything"}'],
+            ["admin-query", "--operation", "events.classes", "--params-json", '{"id":"00000000-0000-4000-8000-000000000000","method":"DELETE"}'],
         ]
         for argv in rejected:
             with self.subTest(argv=argv), self.assertRaises(SystemExit):

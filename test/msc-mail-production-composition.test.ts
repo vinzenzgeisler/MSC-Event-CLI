@@ -137,9 +137,11 @@ test('fails closed before listener activation on mismatched SMTP policy', async 
   }), /must match/);
 });
 
-test('binds one Telegram operator approval to one exact mail proposal and SMTP attempt', async (t) => {
+test('binds authorized WebChat and Telegram sessions to exact mail actions', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'msc-mail-telegram-'));
   const sessionKey = 'agent:main:telegram:direct:8261978945';
+  const webchatSessionKey =
+    'agent:main:dashboard:a08cd2c0-a3db-4175-8069-2e6c1aee7842';
   let smtpCalls = 0;
   const composition = new MscMailProductionComposition({
     stateDatabasePath: join(directory, 'state.sqlite'),
@@ -150,7 +152,7 @@ test('binds one Telegram operator approval to one exact mail proposal and SMTP a
     basePath: '/msc-approval',
     rpId: 'openclaw.example',
     reviewerActor: 'vinzenz',
-    operatorSessionKey: sessionKey,
+    operatorSessionKeys: [sessionKey, webchatSessionKey],
     trustedProxyAddresses: ['172.20.0.2'],
     bindAddress: '127.0.0.1',
     port: 18443,
@@ -228,6 +230,22 @@ test('binds one Telegram operator approval to one exact mail proposal and SMTP a
   await assert.rejects(
     composition.gatewayApprovalPreview(
       proposed.actionId,
+      payloadReference,
+      'agent:main:telegram:group:8261978945',
+    ),
+    /not enabled for this session/,
+  );
+  await assert.rejects(
+    composition.gatewayApprovalPreview(
+      proposed.actionId,
+      payloadReference,
+      'agent:main:dashboard:10000000-0000-4000-8000-000000000001',
+    ),
+    /not enabled for this session/,
+  );
+  await assert.rejects(
+    composition.gatewayApprovalPreview(
+      proposed.actionId,
       '0'.repeat(12),
       sessionKey,
     ),
@@ -241,16 +259,24 @@ test('binds one Telegram operator approval to one exact mail proposal and SMTP a
     )).title,
     'Auf MSC-E-Mail antworten',
   );
+  assert.equal(
+    (await composition.gatewayApprovalPreview(
+      proposed.actionId,
+      payloadReference,
+      webchatSessionKey,
+    )).title,
+    'Auf MSC-E-Mail antworten',
+  );
   await composition.assertGatewaySmtpReady(
     proposed.actionId,
     payloadReference,
-    sessionKey,
+    webchatSessionKey,
   );
 
   const dispatched = await composition.approveAndDispatchFromGateway({
     actionId: proposed.actionId,
     payloadReference,
-    sessionKey,
+    sessionKey: webchatSessionKey,
     toolCallId: 'tool-call-1',
   });
   assert.equal(dispatched.status, 'accepted');
@@ -322,6 +348,8 @@ test('binds one Telegram operator approval to one exact mail proposal and SMTP a
 test('binds one Telegram approval to one stale-state-checked entry mutation', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'msc-event-telegram-'));
   const sessionKey = 'agent:main:telegram:direct:8261978945';
+  const webchatSessionKey =
+    'agent:main:dashboard:a08cd2c0-a3db-4175-8069-2e6c1aee7842';
   const entryId = '10000000-0000-4000-8000-000000000001';
   let reads = 0;
   let writes = 0;
@@ -334,7 +362,7 @@ test('binds one Telegram approval to one stale-state-checked entry mutation', as
     basePath: '/msc-approval',
     rpId: 'openclaw.example',
     reviewerActor: 'vinzenz',
-    operatorSessionKey: sessionKey,
+    operatorSessionKeys: [sessionKey, webchatSessionKey],
     trustedProxyAddresses: ['172.20.0.2'],
     bindAddress: '127.0.0.1',
     port: 18443,

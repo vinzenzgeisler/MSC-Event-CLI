@@ -132,8 +132,11 @@ An operation file contains exactly one allowlisted change, for example:
 }
 ```
 
-Other supported operation types are `payment-amounts`, `notes` and `class`.
-Unknown properties and lifecycle-mail side effects are rejected.
+Other supported operation types include `payment-amounts`, `notes`, `class`,
+and the atomic `assignment` operation. Assignment binds a normalized uppercase
+one-to-six-character alphanumeric start number, class, backup/type-change
+flags, `requestCodriverData`, and literal `sendSystemMail: true` to one
+approval. Unknown properties and unapproved mail side effects are rejected.
 
 The root-owned configuration contains paths, policy and the public approval
 origin, but no key material:

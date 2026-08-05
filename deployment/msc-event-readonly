@@ -16,43 +16,57 @@ LOOKUP_OPTIONS = {"--orga-code", "--email", "--name", "--codriver-name", "--star
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.I)
 CLIENT_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 ADMIN_QUERY_OPERATIONS = {
-    "dashboard.summary",
-    "dashboard.driver-locations",
-    "events.list",
-    "events.get",
     "events.classes",
-    "events.current",
     "entries.list",
-    "entries.deleted",
-    "entries.get",
-    "entries.checkin",
-    "pricing.get",
-    "invoices.list",
-    "invoices.payments",
-    "exports.list",
-    "exports.get",
-    "mail.outbox",
-    "mail.templates",
-    "mail.template-versions",
-    "mail.template-placeholders",
-    "mail.recipients",
-    "iam.roles",
-    "iam.users",
 }
 SUPPORT_READ_SCOPES = (
-    "msc-support/dashboard.read",
     "msc-support/entries.read",
-    "msc-support/entries.payment.read",
-    "msc-support/communication.read",
-    "msc-support/exports.read",
     "msc-support/settings.read",
-    "msc-support/iam.read",
 )
+ACCEPTANCE_STATUSES = {"pending", "shortlist", "accepted", "rejected"}
 
 
 def fail(message: str, code: int = 4) -> None:
     print(f"msc-event-readonly: {message}", file=sys.stderr)
     raise SystemExit(code)
+
+
+def valid_admin_query(operation: str, parameters: dict[str, object]) -> bool:
+    if operation == "events.classes":
+        return (
+            set(parameters) == {"id"}
+            and isinstance(parameters["id"], str)
+            and UUID.fullmatch(parameters["id"]) is not None
+        )
+    if operation != "entries.list":
+        return False
+    allowed = {"eventId", "acceptanceStatus", "classId", "limit", "cursor"}
+    if not set(parameters).issubset(allowed):
+        return False
+    event_id = parameters.get("eventId")
+    if not isinstance(event_id, str) or UUID.fullmatch(event_id) is None:
+        return False
+    acceptance_status = parameters.get("acceptanceStatus")
+    if acceptance_status is not None and acceptance_status not in ACCEPTANCE_STATUSES:
+        return False
+    class_id = parameters.get("classId")
+    if class_id is not None and (
+        not isinstance(class_id, str) or UUID.fullmatch(class_id) is None
+    ):
+        return False
+    limit = parameters.get("limit")
+    if limit is not None and (
+        not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100
+    ):
+        return False
+    cursor = parameters.get("cursor")
+    if cursor is not None and (
+        not isinstance(cursor, str)
+        or not 1 <= len(cursor) <= 2048
+        or any(char in cursor for char in "\r\n\0")
+    ):
+        return False
+    return True
 
 
 def command_args(argv: list[str]) -> list[str]:
@@ -78,6 +92,8 @@ def command_args(argv: list[str]) -> list[str]:
             fail("invalid admin query parameters")
         if not isinstance(parameters, dict):
             fail("admin query parameters must be an object")
+        if not valid_admin_query(argv[2], parameters):
+            fail("admin query parameters are outside the typed allowlist")
         return argv
     fail("allowed commands: health; lookup; detail; typed admin-query")
 
